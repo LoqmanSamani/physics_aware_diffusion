@@ -140,5 +140,3 @@ physics_aware_diffusion/
 ```
 
 
-## Running toy experiments
-python experiments/toy_2d/train_fp_adaptive.py
