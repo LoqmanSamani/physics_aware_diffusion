@@ -1,8 +1,25 @@
 # Physics-Aware Diffusion Models
 
-This repository implements adaptive Fokker–Planck regularization for
-energy-based diffusion models and physics-preserving distillation
-into fast samplers.
+Energy-based diffusion models trained on equilibrium molecular configurations are consid-
+ered as powerful generative tools, with the potential to reduce or replace computationally in-
+tensive molecular dynamics simulations. However, their practical use remains limited by several
+challenges. Training is often unstable, and inference is computationally expensive due to the
+large number of diffusion steps required for each generated configuration. Moreover, generat-
+ing time-dependent molecular trajectories requires running the full reverse diffusion process for
+each configuration along the trajectory, resulting in a computational cost that scales linearly
+with both the number of diffusion steps and the number of generated configurations. Another
+important limitation is that the learned score function at near-zero diffusion times often violates
+the Fokker–Planck equation, leading in force fields that reproduce equilibrium distributions but
+fail to generate physically correct dynamics. Recent work has shown that enforcing Fokker–
+Planck consistency during training can improve physical validity, but this comes at a significant
+computational cost.
+In this work, we aim to develop a model that combines selective Fokker–Planck regular-
+ization with energy-consistent distillation into fast sampling schemes. The core idea is to treat
+Fokker–Planck consistency as a diagnostic constraint that is enforced only when violations ex-
+ceed a predefined threshold. The resulting physically consistent model is then compressed into a
+low-step generative model that preserves both equilibrium statistics and conservative force prop-
+erties. This approach seeks to substantially reduce computational complexity while maintaining
+thermodynamic and dynamical correctness.
 
 ## Features
 - Energy-parameterized diffusion models
