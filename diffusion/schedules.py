@@ -5,7 +5,7 @@ import torch.nn as nn
 
 class LinearVS(nn.Module):
     def __init__(self, num_steps: int = 1000, beta_start: float = 1e-4, beta_end: float = 0.02, start: float = 0.0, end: float = 1.0):
-        """The main scheduler used in this research"""
+        """the main scheduler used in this research"""
         super().__init__()
         self.num_steps = num_steps
         self.start = start
@@ -16,7 +16,7 @@ class LinearVS(nn.Module):
         if not (0.0 < beta_start < beta_end):
             raise ValueError(f"Must satisfy 0 < beta_start < beta_end")
 
-        self.dt = (end - start) / num_steps
+        self.dt = (end - start) / (num_steps - 1)
         t = torch.linspace(start, end, num_steps)
         betas = beta_start + (beta_end - beta_start) * t / end
         integral_beta = beta_start * t + 0.5 * (beta_end - beta_start) * t ** 2 / end
@@ -26,25 +26,25 @@ class LinearVS(nn.Module):
         self.register_buffer("integral_beta", integral_beta)
 
     def get_variance(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get variance for VP SDE: σ²(t) = 1 - exp(-∫₀ᵗ β(s) ds)"""
+        """get variance for vp sde: σ²(t) = 1 - exp(-∫₀ᵗ β(s) ds)"""
         return 1.0 - torch.exp(-self.integral_beta[t_index])
 
     def get_std(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get standard deviation: σ(t) = √(1 - exp(-∫₀ᵗ β(s) ds))"""
+        """get standard deviation: σ(t) = √(1 - exp(-∫₀ᵗ β(s) ds))"""
         return torch.sqrt(self.get_variance(t_index))
 
     def get_drift_coeff(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get drift coefficient: -0.5 * β(t)"""
+        """get drift coefficient: -0.5 * β(t)"""
         return -0.5 * self.betas[t_index]
 
     def get_diffusion_coeff(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get diffusion coefficient: √β(t)"""
+        """get diffusion coefficient: √β(t)"""
         return torch.sqrt(self.betas[t_index])
 
 
 class SigmoidVS(nn.Module):
     def __init__(self, num_steps: int = 1000, beta_start: float = 1e-4, beta_end: float = 0.02, start: float = 0.0, end: float = 1.0):
-        """Optional scheduler which can be alternatively used"""
+        """optional scheduler which can be alternatively used"""
         super().__init__()
         self.num_steps = num_steps
         self.start = start
@@ -70,17 +70,13 @@ class SigmoidVS(nn.Module):
         self.register_buffer("integral_beta", integral_beta)
 
     def get_variance(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get variance for VP SDE: σ²(t) = 1 - exp(-∫₀ᵗ β(s) ds)"""
         return 1.0 - torch.exp(-self.integral_beta[t_index])
 
     def get_std(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get standard deviation: σ(t) = √(1 - exp(-∫₀ᵗ β(s) ds))"""
         return torch.sqrt(self.get_variance(t_index))
 
     def get_drift_coeff(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get drift coefficient: -0.5 * β(t)"""
         return -0.5 * self.betas[t_index]
 
     def get_diffusion_coeff(self, t_index: torch.Tensor) -> torch.Tensor:
-        """Get diffusion coefficient: √β(t)"""
         return torch.sqrt(self.betas[t_index])

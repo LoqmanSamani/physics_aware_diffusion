@@ -59,15 +59,22 @@ class TestReverseVP:
         assert xt_prev.shape == xt.shape
 
     def test_perfect_noise_prediction_moves_toward_clean(self, reverse_vp, forward_vp):
+
         x0 = torch.randn(4, 3, 32, 32)
         true_noise = torch.randn_like(x0)
         t_index = torch.full((4,), 50, dtype=torch.long)
         xt = forward_vp(x0, true_noise, t_index)
-        x_current = xt
+        x_current = xt.clone()
         zero_noise = torch.zeros_like(xt)
         for step in range(50, 0, -5):
             t_current = torch.full((4,), step, dtype=torch.long)
-            x_current = reverse_vp(x_current, true_noise, t_current, zero_noise)
+            alpha_t = torch.exp(-0.5 * reverse_vp.vs.integral_beta[t_current])
+            sigma_t = reverse_vp.vs.get_std(t_current)
+            while alpha_t.dim() < x_current.dim():
+                alpha_t = alpha_t.unsqueeze(-1)
+                sigma_t = sigma_t.unsqueeze(-1)
+            perfect_noise = (x_current - alpha_t * x0) / (sigma_t + 1e-8)
+            x_current = reverse_vp(x_current, perfect_noise, t_current, zero_noise)
         dist_before = torch.norm(xt - x0)
         dist_after = torch.norm(x_current - x0)
         assert dist_after < dist_before

@@ -10,6 +10,8 @@ class ForwardVP(nn.Module):
 
     def forward(self, x0: torch.Tensor, noise: torch.Tensor, t_index: torch.Tensor) -> torch.Tensor:
 
+        assert t_index.min() >= 0 and t_index.max() < self.vs.num_steps
+
         variance = self.vs.get_variance(t_index)
         signal_coeff = torch.sqrt(1.0 - variance)
         noise_coeff = torch.sqrt(variance)
@@ -21,4 +23,3 @@ class ForwardVP(nn.Module):
         xt = signal_coeff * x0 + noise_coeff * noise
 
         return xt
-
