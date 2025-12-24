@@ -16,7 +16,7 @@ class LinearVS(nn.Module):
         if not (0.0 < beta_start < beta_end):
             raise ValueError(f"Must satisfy 0 < beta_start < beta_end")
 
-        #self.dt = (end - start) / num_steps
+        self.dt = (end - start) / num_steps
         t = torch.linspace(start, end, num_steps)
         betas = beta_start + (beta_end - beta_start) * t / end
         integral_beta = beta_start * t + 0.5 * (beta_end - beta_start) * t ** 2 / end
