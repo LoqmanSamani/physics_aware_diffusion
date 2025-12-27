@@ -39,5 +39,5 @@ training:
 
 logging:
   log_freq: 1
-  checkpoint_freq: 2
-  output_dir: ../mnist/train_checkpoints/mnist_vp_sde_2
+  checkpoint_freq: 20
+  output_dir: ../mnist/train_checkpoints/mnist_vp_sde
