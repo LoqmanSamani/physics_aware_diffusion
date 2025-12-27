@@ -1,0 +1,43 @@
+# the setup below is used to train a vp-sde model on MNIST dataset.
+# it used originally to test whether forward and backward of SDEs are stable
+# and the model can generate recognizable digits.
+
+
+experiment:
+  name: mnist_vp_sde_tinyunet
+  seed: 42
+  device: cuda
+
+dataset:
+  name: mnist
+  data_dir: ./data
+  subset_fraction: 1.0
+  image_size: 28
+  channels: 1
+  normalize: [-1.0, 1.0]
+
+diffusion:
+  type: vp_sde
+  num_steps: 400
+  time_start: 0.0
+  time_end: 20.0
+  beta_start: 2e-4
+  beta_end: 0.05
+
+model:
+  name: tiny_unet
+  base_channels: 32
+  time_embedding_dim: 128
+
+training:
+  batch_size: 32
+  epochs: 120
+  learning_rate: 1e-4
+  weight_decay: 1e-4
+  grad_accumulation: 2
+  precision: fp32
+
+logging:
+  log_freq: 1
+  checkpoint_freq: 20
+  output_dir: ./train_checkpoints

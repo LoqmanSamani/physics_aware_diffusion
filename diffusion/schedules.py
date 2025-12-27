@@ -4,7 +4,7 @@ import torch.nn as nn
 
 
 class LinearVS(nn.Module):
-    def __init__(self, num_steps: int = 1000, beta_start: float = 1e-4, beta_end: float = 0.02, start: float = 0.0, end: float = 1.0):
+    def __init__(self, num_steps: int = 1000, beta_start: float = 0.02, beta_end: float = 2.0, start: float = 0.0, end: float = 1.0):
         """the main scheduler used in this research"""
         super().__init__()
         self.num_steps = num_steps
