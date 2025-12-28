@@ -1,13 +1,14 @@
 import torch
 import torch.nn as nn
 from torch_scatter import scatter_softmax, scatter_add
+import math
 from typing import Optional
 
 
 
 class ScoreNet(nn.Module):
     """graph transformer score network for the diffusion model"""
-    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1) -> None:
+    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
         super().__init__()
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
@@ -49,6 +50,19 @@ class TimeEmbedding(nn.Module):
             nn.SiLU(),
             nn.Linear(embed_dim, embed_dim)
         )
+
+class SinusoidalTimeEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, t):
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+        emb = t[:, None] * emb[None, :]
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+        return emb
 
     def forward(self, time_: torch.Tensor) -> torch.Tensor:
         """
@@ -119,7 +133,7 @@ class NodeInitializer(nn.Module):
         self.time_embed = TimeEmbedding(hidden_dim)
 
     def forward(self, atom_features: torch.Tensor, time_: torch.Tensor, num_nodes: int,
-                batch: Optional[torch.Tenosr] = None) -> torch.Tensor:
+                batch: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         arguments:
             atom_features: (N, atom_dim)

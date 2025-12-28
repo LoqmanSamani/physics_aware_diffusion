@@ -3,12 +3,14 @@ import torch.nn as nn
 from torchvision.utils import save_image
 from typing import Tuple
 import os
+from tqdm import tqdm
+
 
 
 class DiffusionSampler(nn.Module):
     """sampler for variance preserving sde diffusion"""
     def __init__(self, score_net: nn.Module, reverse_vp: nn.Module, output_size: Tuple[int, int],
-                 batch_size: int, in_channels: int, device: str = "cuda") -> None:
+                 batch_size: int, in_channels: int, device: str = "cuda", *args) -> None:
         super().__init__()
         self.device = device
         self.score_net = score_net.to(self.device)
@@ -23,17 +25,25 @@ class DiffusionSampler(nn.Module):
         ).to(self.device)
         self.score_net.eval()
         self.reverse_vp.eval()
+
+        num_steps = self.reverse_vp.vs.num_steps
+        iterator = reversed(range(num_steps))
+        iterator = tqdm(list(iterator), desc="Sampling")
+
         with torch.no_grad():
             xt = noisy_x
-            for t in reversed(range(self.reverse_vp.vs.num_steps)):
-                noise = torch.randn_like(xt)
-                time_ = torch.full((self.batch_size, ), t).to(self.device)
+            for t in iterator:
+                time_ = torch.full((self.batch_size, ), t, dtype=torch.long).to(self.device)
                 t_norm = time_.float() / (self.reverse_vp.vs.num_steps - 1)
                 pred_noise = self.score_net(xt, t_norm)
+                if t > 0:
+                    noise = torch.randn_like(xt)
+                else:
+                    noise = torch.zeros_like(xt)
                 xt = self.reverse_vp(xt, pred_noise, time_, noise)
             x0 = torch.clamp(xt, min=-1.0, max=1.0)
             os.makedirs(store_path, exist_ok=True)
             for i in range(x0.size(0)):
                 img_path = os.path.join(store_path, f"img_{i + 1}.png")
-                save_image(x0[i], img_path)
+                save_image((x0[i] + 1) / 2, img_path)
         return x0

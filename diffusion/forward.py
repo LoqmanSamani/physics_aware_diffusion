@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class ForwardVP(nn.Module):
     """forward diffusion process of variance preserving sde"""
-    def __init__(self, variance_scheduler: nn.Module) -> None:
+    def __init__(self, variance_scheduler: nn.Module, *args) -> None:
         super().__init__()
         self.vs = variance_scheduler
 

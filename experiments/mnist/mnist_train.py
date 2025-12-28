@@ -24,7 +24,7 @@ def vp_noise_loss(pred_noise, true_noise, *args):
 
 
 project_root = Path(__file__).parent.parent.parent
-config_path = project_root / "configs" / "mnist" / "mnist_vp_sde.yaml"
+config_path = project_root / "configs" / "mnist_vp_sde.yaml"
 cfg = load_config(str(config_path))
 set_seed(cfg["experiment"]["seed"])
 
@@ -54,6 +54,9 @@ data_loader = get_mnist_subset_dataloader(
     batch_size=cfg["training"]["batch_size"],
     subset_fraction=cfg["dataset"]["subset_fraction"],
 )
+
+
+
 
 trainer = DiffusionTrainer(
     score_net=score_net,

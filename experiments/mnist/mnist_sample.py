@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from diffusion.reverse import ReverseVP
-from models.score.tiny_unet import TinyUNet
+from score_nets.tiny_unet import TinyUNet
 from samplers.diffusion_sampler import DiffusionSampler
 from diffusion.schedules import LinearVS
 from configs.load_config import load_config
@@ -22,7 +22,7 @@ vs = LinearVS(
 
 reverse_vp = ReverseVP(vs).to("cuda")
 
-checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/train_checkpoints/mnist_vp_sde/vp_epoch_120.pth", map_location="cpu")
+checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/train_checkpoints/mnist_vp_sde/vp_best.pth", map_location="cpu")
 score_net = TinyUNet(
     in_channels=cfg["dataset"]["channels"],
     base_channels=cfg["model"]["base_channels"],
@@ -40,7 +40,7 @@ sampler = DiffusionSampler(
     in_channels=1
 )
 
-sampler("../result_/mnist")
+sampler("../mnist/result_/mnist2")
 
 
 
