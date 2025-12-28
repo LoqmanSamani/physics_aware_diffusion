@@ -38,17 +38,18 @@ class DiffusionTrainer(nn.Module):
                 x = x.to(self.device)
                 noise = torch.randn_like(x)
                 time_ = torch.randint(0, self.forward_vp.vs.num_steps, (x.shape[0],), device=self.device)
+                t_norm = time_.float() / (self.forward_vp.vs.num_steps - 1)
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
                         noisy_x = self.forward_vp(x, noise, time_)
                     with torch.amp.autocast('cuda', enabled=False):
-                        score = self.score_net(noisy_x, time_)
+                        score = self.score_net(noisy_x, t_norm)
                     with torch.amp.autocast('cuda'):
                         loss = self.loss_fn(score, noise, time_, self.forward_vp.vs) / self.grad_acc
                     self.scaler.scale(loss).backward()
                 else:
                     noisy_x = self.forward_vp(x, noise, time_)
-                    score = self.score_net(noisy_x, time_)
+                    score = self.score_net(noisy_x, t_norm)
                     loss = self.loss_fn(score, noise, time_, self.forward_vp.vs) / self.grad_acc
                     loss.backward()
                 if (step + 1) % self.grad_acc == 0:
@@ -75,9 +76,9 @@ class DiffusionTrainer(nn.Module):
                 self.optimizer.zero_grad()
             mean_train_loss = sum(train_losses_epoch) / len(train_losses_epoch)
             train_losses.append(mean_train_loss)
-            if (epoch + 1) % self.log_freq == 0:
-                lr = self.optimizer.param_groups[0]['lr']
-                print(f"\nEpoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_train_loss:.4f}")
+            #if (epoch + 1) % self.log_freq == 0:
+                #lr = self.optimizer.param_groups[0]['lr']
+                #print(f"\nEpoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_train_loss:.4f}")
             if (epoch + 1) % self.checkpoint == 0:
                 self._save_checkpoint(epoch + 1, mean_train_loss, train_losses)
             if mean_train_loss < self.best_loss:

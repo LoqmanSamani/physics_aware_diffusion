@@ -18,7 +18,7 @@ dataset:
 
 diffusion:
   type: vp_sde
-  num_steps: 400
+  num_steps: 1000
   time_start: 0.0
   time_end: 20.0
   beta_start: 0.0002
@@ -26,13 +26,13 @@ diffusion:
 
 model:
   name: tiny_unet
-  base_channels: 32
+  base_channels: 64
   time_embedding_dim: 128
 
 training:
   batch_size: 32
   epochs: 120
-  learning_rate: 0.0002
+  learning_rate: 0.0001
   weight_decay: 0.0001
   grad_accumulation: 2
   precision: fp32
