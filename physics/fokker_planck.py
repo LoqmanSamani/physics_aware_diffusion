@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 
 
-def weak_fp_residual_graph(energy_net: nn.Module, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor, time_: torch.Tensor,
-                           batch: torch.Tesnor, scheduler: nn.Module, v_sigma: float = 1e-2, h_time: float = 1e-3) -> torch.Tensor:
+def weak_fp_residual(energy_net: nn.Module, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor, time_: torch.Tensor,
+                           batch: torch.Tensor, scheduler: nn.Module, v_sigma: float = 1e-2, h_time: float = 1e-3) -> torch.Tensor:
     """
     weak Fokker-Planck residual estimator
     """

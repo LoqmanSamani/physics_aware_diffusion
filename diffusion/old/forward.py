@@ -9,12 +9,17 @@ class ForwardVP(nn.Module):
         self.vs = variance_scheduler
 
     def forward(self, x0: torch.Tensor, noise: torch.Tensor, t_index: torch.Tensor) -> torch.Tensor:
+
         assert t_index.min() >= 0 and t_index.max() < self.vs.num_steps
+
         variance = self.vs.get_variance(t_index)
         signal_coeff = torch.sqrt(1.0 - variance)
         noise_coeff = torch.sqrt(variance)
+
         while signal_coeff.dim() < x0.dim():
             signal_coeff = signal_coeff.unsqueeze(-1)
             noise_coeff = noise_coeff.unsqueeze(-1)
+
         xt = signal_coeff * x0 + noise_coeff * noise
+
         return xt

@@ -1,8 +1,8 @@
 import pytest
 import torch
 import torch.nn as nn
-from models.score.score_net import (
-    ScoreNet,
+from score_nets.energy_net import (
+    EnergyNet,
     GraphTransformer,
     NodeInitializer,
     TimeEmbedding,
@@ -65,7 +65,7 @@ def model_params():
 
 class TestModelInstantiation:
     def test_score_net_creation(self, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         assert isinstance(model, nn.Module)
         assert len(model.layers) == model_params['num_layers']
 
@@ -84,7 +84,7 @@ class TestModelInstantiation:
 
 class TestForwardPass:
     def test_single_molecule_forward(self, single_molecule_data, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.eval()
         with torch.no_grad():
             scores = model(
@@ -98,7 +98,7 @@ class TestForwardPass:
         assert not torch.isinf(scores).any(), "Output contains inf values"
 
     def test_batched_molecule_forward(self, batched_molecule_data, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.eval()
         with torch.no_grad():
             scores = model(
@@ -113,7 +113,7 @@ class TestForwardPass:
         assert not torch.isinf(scores).any()
 
     def test_backward_pass(self, single_molecule_data, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.train()
         scores = model(
             single_molecule_data['coords'],
@@ -176,7 +176,7 @@ class TestTranslationInvariance:
             "Edge features should be translation invariant"
 
     def test_model_processes_relative_positions(self, single_molecule_data, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.eval()
         with torch.no_grad():
             scores1 = model(
@@ -189,7 +189,7 @@ class TestTranslationInvariance:
 
 class TestPermutationEquivariance:
     def test_permutation_equivariance(self, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.eval()
         num_atoms = 8
         atom_features = torch.randn(num_atoms, model_params['atom_dim'])
@@ -211,7 +211,7 @@ class TestPermutationEquivariance:
 
 class TestEdgeCases:
     def test_single_atom(self, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.eval()
         atom_features = torch.randn(1, model_params['atom_dim'])
         coords = torch.randn(1, 3)
@@ -223,7 +223,7 @@ class TestEdgeCases:
         assert not torch.isnan(scores).any()
 
     def test_different_time_values(self, single_molecule_data, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.eval()
         times = [0.0, 0.25, 0.5, 0.75, 1.0]
         for t in times:
@@ -239,7 +239,7 @@ class TestEdgeCases:
             assert not torch.isnan(scores).any()
 
     def test_fully_connected_graph(self, model_params):
-        model = ScoreNet(**model_params)
+        model = EnergyNet(**model_params)
         model.eval()
         num_atoms = 5
         atom_features = torch.randn(num_atoms, model_params['atom_dim'])
@@ -254,7 +254,7 @@ class TestEdgeCases:
 
 class TestDeviceCompatibility:
     def test_cpu_execution(self, single_molecule_data, model_params):
-        model = ScoreNet(**model_params).cpu()
+        model = EnergyNet(**model_params).cpu()
         model.eval()
         coords = single_molecule_data['coords'].cpu()
         atom_features = single_molecule_data['atom_features'].cpu()
@@ -267,7 +267,7 @@ class TestDeviceCompatibility:
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_cuda_execution(self, single_molecule_data, model_params):
-        model = ScoreNet(**model_params).cuda()
+        model = EnergyNet(**model_params).cuda()
         model.eval()
         coords = single_molecule_data['coords'].cuda()
         atom_features = single_molecule_data['atom_features'].cuda()
@@ -281,10 +281,10 @@ class TestDeviceCompatibility:
 class TestReproducibility:
     def test_deterministic_forward_pass(self, single_molecule_data, model_params):
         torch.manual_seed(42)
-        model1 = ScoreNet(**model_params)
+        model1 = EnergyNet(**model_params)
         model1.eval()
         torch.manual_seed(42)
-        model2 = ScoreNet(**model_params)
+        model2 = EnergyNet(**model_params)
         model2.eval()
         model2.load_state_dict(model1.state_dict())
         with torch.no_grad():

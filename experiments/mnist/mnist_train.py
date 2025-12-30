@@ -12,11 +12,11 @@ from pathlib import Path
 
 
 
-#def set_seed(seed):
-#    random.seed(seed)
-#    np.random.seed(seed)
-#    torch.manual_seed(seed)
-#    torch.cuda.manual_seed_all(seed)
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def vp_noise_loss(pred_noise, true_noise, *args):
@@ -26,7 +26,7 @@ def vp_noise_loss(pred_noise, true_noise, *args):
 project_root = Path(__file__).parent.parent.parent
 config_path = project_root / "configs" / "mnist_vp_sde.yaml"
 cfg = load_config(str(config_path))
-#set_seed(cfg["experiment"]["seed"])
+set_seed(cfg["experiment"]["seed"])
 
 vs = LinearVS(
     num_steps=cfg["diffusion"]["num_steps"],
@@ -75,7 +75,5 @@ trainer = DiffusionTrainer(
     device=cfg["experiment"]["device"],
     warmup_steps=cfg["training"]["warmup_steps"]
 )
-
-
 
 train_losses = trainer()

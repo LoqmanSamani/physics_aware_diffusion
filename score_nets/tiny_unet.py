@@ -64,13 +64,16 @@ class ResBlock(nn.Module):
 
 
 
-class TimeEmbedding(nn.Module):
-    def __init__(self, dim):
+class SinusoidalTimeEmbedding(nn.Module):
+    """sinusoidal time embedding"""
+    def __init__(self, embed_dim: int) -> None:
         super().__init__()
-        self.dim = dim
+        self.embed_dim = embed_dim
 
     def forward(self, t):
-        half_dim = self.dim // 2
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
+        half_dim = self.embed_dim // 2
         emb = math.log(10000) / (half_dim - 1)
         emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
         emb = t[:, None] * emb[None, :]
@@ -101,16 +104,25 @@ class AttentionBlock(nn.Module):
         return x + self.proj(h)
 
 
-"""
+
 class TimeEmbedding(nn.Module):
-    def __init__(self, dim):
+    """time embedding for diffusion timestep"""
+    def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
-            nn.Linear(1, dim),
+            nn.Linear(1, embed_dim),
             nn.SiLU(),
-            nn.Linear(dim, dim),
+            nn.Linear(embed_dim, embed_dim)
         )
 
-    def forward(self, t):
-        return self.mlp(t.unsqueeze(-1))
-"""
+    def forward(self, time_: torch.Tensor) -> torch.Tensor:
+        """
+        arguments:
+            time_: (batch_size,) or scalar
+        returns:
+            (batch_size, embed_dim) or (1, embed_dim)
+        """
+        if time_.dim() == 0:
+            time_ = time_.unsqueeze(0)
+        return self.mlp(time_.unsqueeze(-1))
+

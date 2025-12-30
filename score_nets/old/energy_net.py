@@ -5,13 +5,12 @@ import math
 from typing import Optional
 
 
+
 class EnergyNet(nn.Module):
     """
-    energy-based graph transformer for conservative score parameterization.
-    the score is computed as: s_θ(x,t) = ∇_x log p_θ(x,t) = ∇_x E_θ(x,t)
-    where E_θ is the energy function (log probability).
+    energy graph transformer used as energy net of the model
     """
-    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
+    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, * args) -> None:
         super().__init__()
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
@@ -29,7 +28,7 @@ class EnergyNet(nn.Module):
             time_: (batch_size,) or scalar diffusion timestep
             batch: (N,) batch assignment for each node (optional)
         returns:
-            scalar log p_theta(x,t) - the energy function
+            scalar log p_theta(x,t)
         """
         num_nodes = data.size(0)
         nodes = self.initializer(atom_features, time_, num_nodes, batch)
@@ -41,10 +40,7 @@ class EnergyNet(nn.Module):
 
 
 class EnergyHead(nn.Module):
-    """
-    maps node embeddings to scalar energies and sums them.
-    ψ : R^K → R, then score = ∇_x Σ_i ψ(n^(L)_i)
-    """
+    """energy head (node → scalar)"""
     def __init__(self, hidden_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
@@ -54,8 +50,7 @@ class EnergyHead(nn.Module):
         )
 
     def forward(self, node_features: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """maps each node to a scalar energy and sums over the molecule(s)."""
-        node_energy = self.mlp(node_features).squeeze(-1)  # (N,)
+        node_energy = self.mlp(node_features).squeeze(-1)
         if batch is None:
             return node_energy.sum()
         else:
@@ -63,7 +58,7 @@ class EnergyHead(nn.Module):
 
 
 class TimeEmbedding(nn.Module):
-    """simple mlp-based time embedding"""
+    """time embedding for diffusion timestep"""
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
@@ -85,14 +80,11 @@ class TimeEmbedding(nn.Module):
 
 
 class SinusoidalTimeEmbedding(nn.Module):
-    """sinusoidal time embedding"""
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.embed_dim = embed_dim
 
     def forward(self, t):
-        if t.dim() == 0:
-            t = t.unsqueeze(0)
         half_dim = self.embed_dim // 2
         emb = math.log(10000) / (half_dim - 1)
         emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
@@ -101,11 +93,9 @@ class SinusoidalTimeEmbedding(nn.Module):
         return emb
 
 
+
 class GraphTransformer(nn.Module):
-    """
-    attention-based message passing layer.
-    n^(l+1) = φ^(l)(n^(l), e) where e_ij = x_i - x_j
-    """
+    """attention-based message passing layer"""
     def __init__(self, hidden_dim: int, dropout: float = 0.1) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -151,12 +141,16 @@ class GraphTransformer(nn.Module):
 
 
 class NodeInitializer(nn.Module):
-    """initialize node embeddings: n_i^(0) = [a_i, t]"""
-
+    """
+    creates the initial node embeddings for a graph by projecting
+    atom features into a hidden space and adding a diffusion timestep
+    embedding so that every node is aware of the current noise level.
+    n_i^(0) = project(a_i) + project(t)
+    """
     def __init__(self, atom_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.atom_project = nn.Linear(atom_dim, hidden_dim)
-        self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
+        self.time_embed = TimeEmbedding(hidden_dim)
 
     def forward(self, atom_features: torch.Tensor, time_: torch.Tensor, num_nodes: int,
                 batch: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -180,7 +174,10 @@ class NodeInitializer(nn.Module):
 
 def compute_edge_features(data: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
     """
-    compute translation-invariant edge features: e_ij = x_i - x_j
+    converts 3d coordinates (data) and graph connectivity (edge_index)
+    into translation-invariant geometric edge features consisting of relative
+    displacement and distance, making graph neural network to reason
+    about spatial relationships between nodes.
     arguments:
         data: (N, 3) atomic coordinates
         edge_index: (2, E) edge connectivity
@@ -188,7 +185,7 @@ def compute_edge_features(data: torch.Tensor, edge_index: torch.Tensor) -> torch
         (E, 4) [relative_x, relative_y, relative_z, distance]
     """
     i, j = edge_index
-    relative_pos = data[i] - data[j]  # e_ij = x_i - x_j (translation invariant)
+    relative_pos = data[i] - data[j]
     distance = torch.norm(relative_pos, dim=-1, keepdim=True)
     edge_features = torch.cat([relative_pos, distance], dim=-1)
     return edge_features

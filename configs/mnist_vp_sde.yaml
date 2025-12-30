@@ -18,7 +18,7 @@ dataset:
 
 diffusion:
   type: vp_sde
-  num_steps: 1000
+  num_steps: 400
   beta_start: 0.1
   beta_end: 20.0
   time_start: 0.0
@@ -44,4 +44,4 @@ training:
 logging:
   log_freq: 1
   checkpoint_freq: 10
-  output_dir: ../mnist/kgs
+  output_dir: ../mnist
