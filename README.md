@@ -107,7 +107,7 @@ physics_aware_diffusion/
 │   │   └── __init__.py
 │   │
 │   ├── score/
-│   │   ├── score_net.py            # alternative to energy form
+│   │   ├── energy_net.py            # alternative to energy form
 │   │   └── __init__.py
 │   │
 │   ├── flow/

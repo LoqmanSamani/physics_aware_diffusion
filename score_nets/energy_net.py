@@ -6,19 +6,17 @@ from typing import Optional
 
 
 
-class ScoreNet(nn.Module):
-    """graph transformer score network for the diffusion model"""
-    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
+class EnergyNet(nn.Module):
+    """
+    energy graph transformer used as energy net of the model
+    """
+    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, * args) -> None:
         super().__init__()
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
             GraphTransformer(hidden_dim, dropout) for _ in range(num_layers)
         ])
-        self.output_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, 3)
-        )
+        self.energy_head = EnergyHead(hidden_dim)
 
     def forward(self, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                 time_: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -30,15 +28,33 @@ class ScoreNet(nn.Module):
             time_: (batch_size,) or scalar diffusion timestep
             batch: (N,) batch assignment for each node (optional)
         returns:
-            scores: (N, 3) predicted score for each atom
+            scalar log p_theta(x,t)
         """
         num_nodes = data.size(0)
         nodes = self.initializer(atom_features, time_, num_nodes, batch)
         edges = compute_edge_features(data, edge_index)
         for layer in self.layers:
             nodes = layer(nodes, edges, edge_index)
-        scores = self.output_head(nodes)
-        return scores
+        logp = self.energy_head(nodes, batch)
+        return logp
+
+
+class EnergyHead(nn.Module):
+    """energy head (node → scalar)"""
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, node_features: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
+        node_energy = self.mlp(node_features).squeeze(-1)
+        if batch is None:
+            return node_energy.sum()
+        else:
+            return scatter_add(node_energy, batch, dim=0)
 
 
 class TimeEmbedding(nn.Module):
@@ -51,10 +67,11 @@ class TimeEmbedding(nn.Module):
             nn.Linear(embed_dim, embed_dim)
         )
 
+
 class SinusoidalTimeEmbedding(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, embed_dim: int):
         super().__init__()
-        self.dim = dim
+        self.embed_dim = embed_dim
 
     def forward(self, t):
         half_dim = self.dim // 2
