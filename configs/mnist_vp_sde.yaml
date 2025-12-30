@@ -19,10 +19,10 @@ dataset:
 diffusion:
   type: vp_sde
   num_steps: 1000
+  beta_start: 0.1
+  beta_end: 20.0
   time_start: 0.0
-  time_end: 20.0
-  beta_start: 0.0002
-  beta_end: 0.05
+  time_end: 1.0
 
 model:
   name: tiny_unet
@@ -30,14 +30,18 @@ model:
   time_embedding_dim: 128
 
 training:
-  batch_size: 32
-  epochs: 120
-  learning_rate: 0.0001
-  weight_decay: 0.0001
-  grad_accumulation: 2
-  precision: fp32
+  batch_size: 64
+  epochs: 50
+  learning_rate: 0.0002
+  weight_decay: 0.0
+  grad_accumulation: 1
+  precision: fp32  # try 'bf16' for speed
+  optimizer: adamw
+  betas: [0.9, 0.999]
+  ema_decay: 0.9999
+  warmup_steps: 1000
 
 logging:
   log_freq: 1
-  checkpoint_freq: 20
-  output_dir: ../mnist/train_checkpoints/mnist_vp_sde
+  checkpoint_freq: 10
+  output_dir: ../mnist/kgs

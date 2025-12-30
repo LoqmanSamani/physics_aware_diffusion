@@ -29,6 +29,7 @@ class DiffusionSampler(nn.Module):
         num_steps = self.reverse_vp.vs.num_steps
         iterator = reversed(range(num_steps))
         iterator = tqdm(list(iterator), desc="Sampling")
+        #steps = torch.zeros((num_steps, self.batch_size, self.in_channels, self.output_size[0], self.output_size[1]))
 
         with torch.no_grad():
             xt = noisy_x
@@ -41,8 +42,10 @@ class DiffusionSampler(nn.Module):
                 else:
                     noise = torch.zeros_like(xt)
                 xt = self.reverse_vp(xt, pred_noise, time_, noise)
+                #steps[t,  :, :, :] = xt
             x0 = torch.clamp(xt, min=-1.0, max=1.0)
             os.makedirs(store_path, exist_ok=True)
+            #torch.save(steps, f"{store_path}/steps.pt")
             for i in range(x0.size(0)):
                 img_path = os.path.join(store_path, f"img_{i + 1}.png")
                 save_image((x0[i] + 1) / 2, img_path)

@@ -1,7 +1,7 @@
 import torch
 import torch.optim as optim
 from data_loader import get_mnist_subset_dataloader
-from models.score.tiny_unet import TinyUNet
+from score_nets.tiny_unet import TinyUNet
 from trainers.diffusion_trainer import DiffusionTrainer
 from diffusion.forward import ForwardVP
 from diffusion.schedules import LinearVS
@@ -12,11 +12,11 @@ from pathlib import Path
 
 
 
-def set_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+#def set_seed(seed):
+#    random.seed(seed)
+#    np.random.seed(seed)
+#    torch.manual_seed(seed)
+#    torch.cuda.manual_seed_all(seed)
 
 
 def vp_noise_loss(pred_noise, true_noise, *args):
@@ -26,7 +26,7 @@ def vp_noise_loss(pred_noise, true_noise, *args):
 project_root = Path(__file__).parent.parent.parent
 config_path = project_root / "configs" / "mnist_vp_sde.yaml"
 cfg = load_config(str(config_path))
-set_seed(cfg["experiment"]["seed"])
+#set_seed(cfg["experiment"]["seed"])
 
 vs = LinearVS(
     num_steps=cfg["diffusion"]["num_steps"],
@@ -55,7 +55,10 @@ data_loader = get_mnist_subset_dataloader(
     subset_fraction=cfg["dataset"]["subset_fraction"],
 )
 
-
+#checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/mnist_params.pth", map_location="cpu")
+#score_net.load_state_dict(checkpoint["score_net_state"])
+#optimizer.load_state_dict(checkpoint["optimizer_state"])
+#vs.load_state_dict(checkpoint["scheduler"])
 
 
 trainer = DiffusionTrainer(
@@ -69,7 +72,10 @@ trainer = DiffusionTrainer(
     checkpoint=cfg["logging"]["checkpoint_freq"],
     log_freq=cfg["logging"]["log_freq"],
     store_path=cfg["logging"]["output_dir"],
-    device=cfg["experiment"]["device"]
+    device=cfg["experiment"]["device"],
+    warmup_steps=cfg["training"]["warmup_steps"]
 )
+
+
 
 train_losses = trainer()

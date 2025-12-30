@@ -13,6 +13,7 @@ class TinyUNet(nn.Module):
         self.down2 = ResBlock(base_channels, base_channels * 2, time_dim)
         self.downsample = nn.Conv2d(base_channels * 2, base_channels * 2, 4, 2, 1)
         self.mid1 = ResBlock(base_channels * 2, base_channels * 2, time_dim)
+        self.mid_attn = AttentionBlock(base_channels * 2)
         self.mid2 = ResBlock(base_channels * 2, base_channels * 2, time_dim)
         self.upsample = nn.ConvTranspose2d(base_channels * 2, base_channels * 2, 4, 2, 1)
         self.up1 = ResBlock(base_channels * 4, base_channels, time_dim)
@@ -28,6 +29,7 @@ class TinyUNet(nn.Module):
         h2 = self.down2(h1, t_emb)
         h3 = self.downsample(h2)
         h = self.mid1(h3, t_emb)
+        h = self.mid_attn(h)
         h = self.mid2(h, t_emb)
         h = self.upsample(h)
         h = torch.cat([h, h2], dim=1)
@@ -76,6 +78,27 @@ class TimeEmbedding(nn.Module):
         return emb
 
 
+class AttentionBlock(nn.Module):
+    """self-attention block"""
+    def __init__(self, channels):
+        super().__init__()
+        self.norm = nn.GroupNorm(8, channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, 1)
+        self.proj = nn.Conv2d(channels, channels, 1)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        h = self.norm(x)
+        qkv = self.qkv(h)
+        q, k, v = qkv.chunk(3, dim=1)
+        q = q.reshape(B, C, -1).transpose(1, 2)
+        k = k.reshape(B, C, -1)
+        v = v.reshape(B, C, -1).transpose(1, 2)
+        scale = C ** -0.5
+        attn = torch.softmax(torch.bmm(q, k) * scale, dim=-1)
+        h = torch.bmm(attn, v)
+        h = h.transpose(1, 2).reshape(B, C, H, W)
+        return x + self.proj(h)
 
 
 """

@@ -6,13 +6,12 @@ import os
 from typing import Callable
 
 
-
 class DiffusionTrainer(nn.Module):
     """trainer for the variance preserving diffusion model"""
     def __init__(self, score_net: torch.nn.Module, forward_vp: torch.nn.Module,
                  data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer,
                  loss_fn: Callable, epochs: int, grad_acc: int, checkpoint: int,
-                 log_freq: int, store_path: str, device: str, *args) -> None:
+                 log_freq: int, store_path: str, device: str, warmup_steps: int = 0, *args) -> None:
         super().__init__()
         self.score_net = score_net
         self.forward_vp = forward_vp
@@ -25,6 +24,9 @@ class DiffusionTrainer(nn.Module):
         self.log_freq = log_freq
         self.store_path = store_path
         self.device = device
+        self.warmup_steps = warmup_steps
+        self.global_step = 0
+        self.base_lr = optimizer.param_groups[0]['lr']
         self.best_loss = float('inf')
         self.use_amp = (device == 'cuda')
         self.scaler = torch.amp.GradScaler('cuda') if self.use_amp else None
@@ -33,6 +35,13 @@ class DiffusionTrainer(nn.Module):
             T_max=epochs,
             eta_min=1e-6
         )
+
+    def _update_learning_rate(self):
+        """linear warmup"""
+        if self.warmup_steps > 0 and self.global_step < self.warmup_steps:
+            lr = self.base_lr * (self.global_step + 1) / self.warmup_steps
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
 
     def forward(self) -> list:
         self.score_net.train()
@@ -68,6 +77,9 @@ class DiffusionTrainer(nn.Module):
                     else:
                         self.optimizer.step()
                     self.optimizer.zero_grad()
+                    self.global_step += 1
+                    self._update_learning_rate()
+
                 train_losses_epoch.append(loss.item() * self.grad_acc)
                 pbar.set_postfix({'loss': loss.item() * self.grad_acc})
             if len(self.data_loader) % self.grad_acc != 0:
@@ -80,12 +92,19 @@ class DiffusionTrainer(nn.Module):
                 else:
                     self.optimizer.step()
                 self.optimizer.zero_grad()
+                self.global_step += 1
+                self._update_learning_rate()
+
             mean_train_loss = sum(train_losses_epoch) / len(train_losses_epoch)
             train_losses.append(mean_train_loss)
-            self.scheduler.step()
-            #if (epoch + 1) % self.log_freq == 0:
-                #lr = self.optimizer.param_groups[0]['lr']
-                #print(f"\nEpoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_train_loss:.4f}")
+            pbar.set_postfix({'loss': f'{mean_train_loss:.4f} (mean)'})
+            pbar.close()
+
+            if self.global_step >= self.warmup_steps:
+                self.scheduler.step()
+            # if (epoch + 1) % self.log_freq == 0:
+            # lr = self.optimizer.param_groups[0]['lr']
+            # print(f"\nEpoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_train_loss:.4f}")
             if (epoch + 1) % self.checkpoint == 0:
                 self._save_checkpoint(epoch + 1, mean_train_loss, train_losses)
             if mean_train_loss < self.best_loss:

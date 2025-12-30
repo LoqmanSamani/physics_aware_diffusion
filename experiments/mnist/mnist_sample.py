@@ -8,7 +8,7 @@ from configs.load_config import load_config
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent.parent
-config_path = project_root / "configs" / "mnist" / "mnist_vp_sde.yaml"
+config_path = project_root / "configs" / "mnist_vp_sde.yaml"
 cfg = load_config(str(config_path))
 
 
@@ -21,8 +21,9 @@ vs = LinearVS(
 ).to("cuda")
 
 reverse_vp = ReverseVP(vs).to("cuda")
+print(sum(p.numel() for p in reverse_vp.parameters()))
 
-checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/train_checkpoints/mnist_vp_sde/vp_best.pth", map_location="cpu")
+checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/mnist_params.pth", map_location="cpu")
 score_net = TinyUNet(
     in_channels=cfg["dataset"]["channels"],
     base_channels=cfg["model"]["base_channels"],
@@ -40,7 +41,7 @@ sampler = DiffusionSampler(
     in_channels=1
 )
 
-sampler("../mnist/result_/mnist2")
+sampler("../mnist/results")
 
 
 
