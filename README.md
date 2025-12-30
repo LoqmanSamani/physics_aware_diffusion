@@ -1,33 +1,76 @@
 # Physics-Aware Diffusion Models
 
-Energy-based diffusion models trained on equilibrium molecular configurations are consid-
-ered as powerful generative tools, with the potential to reduce or replace computationally in-
-tensive molecular dynamics simulations. However, their practical use remains limited by several
-challenges. Training is often unstable, and inference is computationally expensive due to the
-large number of diffusion steps required for each generated configuration. Moreover, generat-
-ing time-dependent molecular trajectories requires running the full reverse diffusion process for
-each configuration along the trajectory, resulting in a computational cost that scales linearly
-with both the number of diffusion steps and the number of generated configurations. Another
-important limitation is that the learned score function at near-zero diffusion times often violates
-the Fokker–Planck equation, leading in force fields that reproduce equilibrium distributions but
-fail to generate physically correct dynamics. Recent work has shown that enforcing Fokker–
-Planck consistency during training can improve physical validity, but this comes at a significant
-computational cost.
-In this work, we aim to develop a model that combines selective Fokker–Planck regular-
-ization with energy-consistent distillation into fast sampling schemes. The core idea is to treat
-Fokker–Planck consistency as a diagnostic constraint that is enforced only when violations ex-
-ceed a predefined threshold. The resulting physically consistent model is then compressed into a
-low-step generative model that preserves both equilibrium statistics and conservative force prop-
-erties. This approach seeks to substantially reduce computational complexity while maintaining
-thermodynamic and dynamical correctness.
+This project develops energy-based diffusion models for generating molecular configurations. These models can potentially reduce or replace computationally expensive molecular dynamics simulations.
 
-## Features
+## Problem Statement
+
+Current diffusion models for molecular systems face several challenges:
+
+- **Training instability** and high computational cost during inference
+- **Expensive trajectory generation** - each configuration requires a full reverse diffusion process
+- **Physical inconsistencies** - the learned score function often violates the Fokker-Planck equation at near-zero diffusion times, producing correct equilibrium distributions but incorrect dynamics
+
+While enforcing Fokker-Planck consistency during training improves physical validity, it adds significant computational overhead.
+
+## Our Approach
+
+We combine two key techniques:
+
+1. **Selective Fokker-Planck regularization** - We treat Fokker-Planck consistency as a diagnostic constraint, enforcing it only when violations exceed a threshold
+2. **Energy-consistent distillation** - We compress the physically consistent model into a fast sampling scheme
+
+This approach reduces computational complexity while maintaining both thermodynamic accuracy and correct dynamics.
+
+## Key Features
+
 - Energy-parameterized diffusion models
-- Adaptive FP regularization via residual gating
+- Adaptive Fokker-Planck regularization via residual gating
 - Distillation into normalizing flows
-- Evaluation via force error and Langevin stability
+- Evaluation via force error and Langevin stability metrics
 
-## Repo Structure
+## Progress
+
+### Phase 1: Core Diffusion Model ✓
+
+We have implemented and tested the fundamental components of a variance-preserving SDE diffusion model:
+
+- [Forward process](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/diffusion/forward.py) - adds noise to data
+- [Reverse process](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/diffusion/reverse.py) - generates samples
+- [Variance scheduler](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/diffusion/schedules.py) - controls noise levels over time
+
+All components include [unit tests](https://github.com/LoqmanSamani/physics_aware_diffusion/tree/systembiology/tests/diffusion_tests) to ensure correctness.
+
+### Validation Experiment
+
+To verify our implementation, we trained a diffusion model on the [MNIST dataset](https://docs.pytorch.org/vision/main/generated/torchvision.datasets.MNIST.html). This lightweight experiment uses:
+
+- A [UNet-based architecture](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/score_nets/tiny_unet.py) with attention mechanism as the score network
+- Custom [training algorithm](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/trainers/diffusion_trainer.py)
+- DDPM-style [sampling algorithm](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/samplers/diffusion_sampler.py)
+
+**Results:**
+
+<div align="center">
+  <img src="experiments/mnist/results/figs.png" alt="Generated samples" width="1000"/>
+  <br>
+  <em>Samples generated by our trained model</em>
+  <br><br>
+</div>
+
+<div align="center">
+  <img src="experiments/mnist/results/diff_steps3.png" alt="Sampling process" width="1000"/>
+  <br>
+  <em>Three samples shown at different time steps during the sampling process</em>
+  <br><br>
+</div>
+
+The results confirm that our core implementation works correctly.
+
+### Next Steps
+
+Phase 2 will focus on implementing and integrating the Fokker-Planck components into the diffusion model, followed by testing on molecular systems.
+
+## Repository Structure
 ```bash
 physics_aware_diffusion/
 │
