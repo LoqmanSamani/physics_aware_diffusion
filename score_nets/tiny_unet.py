@@ -8,6 +8,7 @@ class TinyUNet(nn.Module):
     def __init__(self, in_channels=1, base_channels=64, time_dim=128):
         super().__init__()
         self.time_embed = TimeEmbedding(time_dim)
+        #self.time_embed = SinusoidalTimeEmbedding(time_dim)
         self.in_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
         self.down1 = ResBlock(base_channels, base_channels, time_dim)
         self.down2 = ResBlock(base_channels, base_channels * 2, time_dim)

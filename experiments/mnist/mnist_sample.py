@@ -37,7 +37,7 @@ sampler = DiffusionSampler(
     score_net=score_net,
     reverse_vp=reverse_vp,
     output_size=(28, 28),
-    batch_size=9,
+    batch_size=50,
     in_channels=1
 )
 
