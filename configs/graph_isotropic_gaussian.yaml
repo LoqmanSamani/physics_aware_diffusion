@@ -1,0 +1,26 @@
+experiment:
+  name: analytic_graph_isotropic_gaussian
+  device: cuda
+
+dataset:
+  name: GraphGaussian3DToy
+  n_samples: 10000
+  min_nodes: 3
+  max_nodes: 5
+  sigma_min: 0.1
+  sigma_max: 2.0
+
+model:
+  name: graph_score_net
+  time_embedding: TimeEmbedding
+  atom_dim: 1
+  hidden_dim: 128
+  num_layers: 3
+  dropout: 0.0
+
+training:
+  batch_size: 64
+  epochs: 50
+  learning_rate: 0.0005
+  precision: fp32
+  optimizer: adam

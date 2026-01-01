@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from score_nets.score_net import ScoreNet
-from trainers.analytic_score_trainer import AnalyticScoreTrainer
+from score_nets.graph_score_net import ScoreGraphNet
+from trainers.node_score_trainer import AnalyticScoreTrainer
+from pathlib import Path
+from configs.load_config import load_config
 
 
 class Gaussian1NodeDataset(torch.utils.data.Dataset):
@@ -34,38 +36,42 @@ def gaussian_score_fn(x_t, sigma_t, **kwargs):
         sigma_t = sigma_t.unsqueeze(-1)
     return -x_t / (sigma_t.unsqueeze(-1) ** 2)
 
+project_root = Path(__file__).parent.parent.parent
+config_path = project_root / "configs" / "node_isotropic_gaussian.yaml"
+cfg = load_config(str(config_path))
 
+device = cfg["experiment"]["device"]
 
-hidden_dim = 64
-num_layers = 2
-batch_size = 32
-lr = 1e-3
-epochs = 100
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-dataset = Gaussian1NodeDataset(n_samples = 1024)
-data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-score_net = ScoreNet(
-    atom_dim=1,
-    hidden_dim=hidden_dim,
-    num_layers=num_layers,
-    dropout=0.0
+dataset = Gaussian1NodeDataset(
+    n_samples=cfg["dataset"]["n_samples"],
+    sigma_min=cfg["dataset"]["sigma_min"],
+    sigma_max=cfg["dataset"]["sigma_max"])
+data_loader = DataLoader(
+    dataset,
+    batch_size=cfg["training"]["batch_size"],
+    shuffle=True
 )
-print(sum(p.numel() for p in score_net.parameters()))
 
-optimizer = torch.optim.Adam(score_net.parameters(), lr=lr)
+score_net = ScoreGraphNet(
+    atom_dim=cfg["model"]["atom_dim"],
+    hidden_dim=cfg["model"]["hidden_dim"],
+    num_layers=cfg["model"]["num_layers"],
+    dropout=cfg["model"]["dropout"]
+)
+#print(sum(p.numel() for p in score_net.parameters()))
+
+optimizer = torch.optim.Adam(score_net.parameters(), lr=cfg["training"]["learning_rate"])
 
 trainer = AnalyticScoreTrainer(
     score_net=score_net,
     data_loader=data_loader,
     optimizer=optimizer,
     score_fn=gaussian_score_fn,
-    epochs=epochs,
+    epochs=cfg["training"]["epochs"],
     device=device
 )
 
-trainer()
+losses = trainer()
 
 
 

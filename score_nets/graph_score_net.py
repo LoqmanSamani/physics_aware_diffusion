@@ -5,8 +5,8 @@ import math
 from typing import Optional
 
 
-class ScoreNet(nn.Module):
-    """score graph transformer with better position handling."""
+class ScoreGraphNet(nn.Module):
+    """score graph transformer"""
     def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
         super().__init__()
         self.position_encoder = PositionalEncoding(hidden_dim)
@@ -18,16 +18,6 @@ class ScoreNet(nn.Module):
 
     def forward(self, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                 time_: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        arguments:
-            data: (N, 3) molecular coordinates
-            atom_features: (N, atom_dim) atom type features
-            edge_index: (2, E) edge connectivity
-            time_: (batch_size,) or scalar diffusion timestep
-            batch: (N,) batch assignment for each node (optional)
-        returns:
-            score: (N, 3)
-        """
         num_nodes = data.size(0)
         pos_features = self.position_encoder(data)
         nodes = self.initializer(atom_features, time_, num_nodes, batch)
@@ -41,26 +31,31 @@ class ScoreNet(nn.Module):
 
 
 class OutputHead(nn.Module):
-    def __init__(self, hidden_dim: int):
+    def __init__(self, hidden_dim: int) -> None:
         super().__init__()
-        self.node_mlp = nn.Sequential(
+        self.coeff_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, 3)
         )
-        self.scale_mlp = nn.Sequential(
+        self.bias_mlp = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim, 3)
         )
 
-    def forward(self, node_features, positions):
-        base = self.node_mlp(node_features)
-        scale = self.scale_mlp(node_features)
-        return base + scale * positions
+    def forward(self, node_features: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        coeff = self.coeff_mlp(node_features)
+        bias = self.bias_mlp(node_features)
+        score = coeff * positions + bias
+        return score
 
 
 class PositionalEncoding(nn.Module):
+    """encode 3d positions into high-dimensional features"""
+
     def __init__(self, hidden_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
@@ -75,8 +70,25 @@ class PositionalEncoding(nn.Module):
         return self.mlp(data)
 
 
+class SinusoidalTimeEmbedding(nn.Module):
+    """sinusoidal time embedding"""
+    def __init__(self, embed_dim: int) -> None:
+        super().__init__()
+        self.embed_dim = embed_dim
+
+    def forward(self, t):
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
+        half_dim = self.embed_dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+        emb = t[:, None] * emb[None, :]
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+        return emb
+
+
 class TimeEmbedding(nn.Module):
-    """simple mlp-based time embedding"""
+    """time embedding"""
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
@@ -99,29 +111,8 @@ class TimeEmbedding(nn.Module):
         return self.mlp(time_.unsqueeze(-1))
 
 
-class SinusoidalTimeEmbedding(nn.Module):
-    """sinusoidal time embedding"""
-
-    def __init__(self, embed_dim: int) -> None:
-        super().__init__()
-        self.embed_dim = embed_dim
-
-    def forward(self, t):
-        if t.dim() == 0:
-            t = t.unsqueeze(0)
-        half_dim = self.embed_dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
-        emb = t[:, None] * emb[None, :]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-        return emb
-
-
 class GraphTransformer(nn.Module):
-    """
-    attention-based message passing layer.
-    n^(l+1) = φ^(l)(n^(l), e) where e_ij = x_i - x_j
-    """
+    """attention-based message passing layer."""
     def __init__(self, hidden_dim: int, dropout: float = 0.1) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -141,15 +132,8 @@ class GraphTransformer(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, nodes: torch.Tensor, edges: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        """
-        arguments:
-            nodes: (N, hidden_dim)
-            edges: (E, 4) [dx, dy, dz, distance]
-            edge_index: (2, E) [source, target]
-        returns:
-            (N, hidden_dim) updated node features
-        """
+    def forward(self, nodes: torch.Tensor, edges: torch.Tensor,
+                edge_index: torch.Tensor) -> torch.Tensor:
         i, j = edge_index
         query_i = self.query(nodes[i])
         key_j = self.key(nodes[j])
@@ -167,15 +151,15 @@ class GraphTransformer(nn.Module):
 
 
 class NodeInitializer(nn.Module):
-    """initialize node embeddings: n_i^(0) = [a_i, t]"""
+    """initialize node embeddings with atom features and time"""
     def __init__(self, atom_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.atom_project = nn.Linear(atom_dim, hidden_dim)
-        #self.time_embed = TimeEmbedding(hidden_dim)
-        self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
+        #self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
+        self.time_embed = TimeEmbedding(hidden_dim)
 
-    def forward(self, atom_features: torch.Tensor, time_: torch.Tensor, num_nodes: int,
-                batch: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, atom_features: torch.Tensor, time_: torch.Tensor,
+                num_nodes: int, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         arguments:
             atom_features: (N, atom_dim)

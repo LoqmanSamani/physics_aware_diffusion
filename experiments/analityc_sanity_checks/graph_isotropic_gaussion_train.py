@@ -1,8 +1,10 @@
 import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from score_nets.score_net import ScoreNet
-from trainers.analytic_score_trainer import AnalyticScoreTrainer
+from score_nets.graph_score_net import ScoreGraphNet
+from trainers.graph_score_trainer import AnalyticScoreTrainer
+from pathlib import Path
+from configs.load_config import load_config
 
 
 
@@ -33,7 +35,7 @@ class GaussianPyGDataset(torch.utils.data.Dataset):
                 if i != j and torch.rand(1).item() < 0.5:
                     edges.append([i, j])
         if len(edges) == 0 and num_nodes > 1:
-            edges = [[0, 1]]  # fallback
+            edges = [[0, 1]]
         edge_index = torch.tensor(edges, dtype=torch.long).t() if edges else torch.empty(2, 0, dtype=torch.long)
         return Data(
             x=atom_features,
@@ -45,48 +47,45 @@ class GaussianPyGDataset(torch.utils.data.Dataset):
 
 def gaussian_score_fn(x_t, sigma_t, **kwargs):
     """∇ log N(0, σ²I) = -x / σ²"""
-    if sigma_t.dim() == 1:
-        sigma_t = sigma_t.unsqueeze(-1)
     return -x_t / (sigma_t.unsqueeze(-1) ** 2)
 
 
-hidden_dim = 128
-num_layers = 3
-batch_size = 64
-lr = 5e-4
-epochs = 100
-device = "cuda" if torch.cuda.is_available() else "cpu"
+project_root = Path(__file__).parent.parent.parent
+config_path = project_root / "configs" / "graph_isotropic_gaussian.yaml"
+cfg = load_config(str(config_path))
 
+device = cfg["experiment"]["device"]
 
-dataset = GaussianPyGDataset(n_samples=10000, min_nodes=3, max_nodes=5)
-data_loader = DataLoader(dataset, batch_size=32, shuffle=True)
+dataset = GaussianPyGDataset(
+    n_samples=cfg["dataset"]["n_samples"],
+    min_nodes=cfg["dataset"]["min_nodes"],
+    max_nodes=cfg["dataset"]["max_nodes"])
+data_loader = DataLoader(
+    dataset,
+    batch_size=cfg["training"]["batch_size"],
+    shuffle=True
+)
 
-
-score_net = ScoreNet(
-    atom_dim=1,
-    hidden_dim=hidden_dim,
-    num_layers=num_layers,
-    dropout=0.0
+score_net = ScoreGraphNet(
+    atom_dim=cfg["model"]["atom_dim"],
+    hidden_dim=cfg["model"]["hidden_dim"],
+    num_layers=cfg["model"]["num_layers"],
+    dropout=cfg["model"]["dropout"]
 )
 #print(sum(p.numel() for p in score_net.parameters()))
 
-optimizer = torch.optim.Adam(score_net.parameters(), lr=lr)
+optimizer = torch.optim.Adam(score_net.parameters(), lr=cfg["training"]["learning_rate"])
 
 trainer = AnalyticScoreTrainer(
     score_net=score_net,
     data_loader=data_loader,
     optimizer=optimizer,
     score_fn=gaussian_score_fn,
-    epochs=epochs,
+    epochs=cfg["training"]["epochs"],
     device=device
 )
 
 losses = trainer()
-
-import matplotlib.pyplot as plt
-
-plt.plot([i for i in range(1, 101)], losses)
-plt.show()
 
 
 
