@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 from data_loader import get_mnist_subset_dataloader
 from score_nets.tiny_unet import TinyUNet
-from trainers.diffusion_trainer import DiffusionTrainer
+from trainers.mnist_trainer import MNISTTrainer
 from diffusion.forward import ForwardVP
 from diffusion.schedules import LinearVS
 from configs.load_config import load_config
@@ -61,7 +61,7 @@ data_loader = get_mnist_subset_dataloader(
 #vs.load_state_dict(checkpoint["scheduler"])
 
 
-trainer = DiffusionTrainer(
+trainer = MNISTTrainer(
     score_net=score_net,
     forward_vp=forward_vp,
     data_loader=data_loader,

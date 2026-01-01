@@ -5,19 +5,16 @@ import math
 from typing import Optional
 
 
-class EnergyNet(nn.Module):
-    """
-    energy-based graph transformer for conservative score parameterization.
-    the score is computed as: s_θ(x,t) = ∇_x log p_θ(x,t) = ∇_x E_θ(x,t)
-    where E_θ is the energy function (log probability).
-    """
+class ScoreNet(nn.Module):
+    """score graph transformer with better position handling."""
     def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
         super().__init__()
+        self.position_encoder = PositionalEncoding(hidden_dim)
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
             GraphTransformer(hidden_dim, dropout) for _ in range(num_layers)
         ])
-        self.energy_head = EnergyHead(hidden_dim)
+        self.out_head = OutputHead(hidden_dim)
 
     def forward(self, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                 time_: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -29,38 +26,53 @@ class EnergyNet(nn.Module):
             time_: (batch_size,) or scalar diffusion timestep
             batch: (N,) batch assignment for each node (optional)
         returns:
-            scalar log p_theta(x,t) - the energy function
+            score: (N, 3)
         """
         num_nodes = data.size(0)
+        pos_features = self.position_encoder(data)
         nodes = self.initializer(atom_features, time_, num_nodes, batch)
-        edges = compute_edge_features(data, edge_index)
-        for layer in self.layers:
-            nodes = layer(nodes, edges, edge_index)
-        logp = self.energy_head(nodes, batch)
-        return logp
+        nodes = nodes + pos_features
+        if edge_index.numel() > 0:
+            edges = compute_edge_features(data, edge_index)
+            for layer in self.layers:
+                nodes = layer(nodes, edges, edge_index)
+        score = self.out_head(nodes, data)
+        return score
 
 
-class EnergyHead(nn.Module):
-    """
-    maps node embeddings to scalar energies and sums them.
-    ψ : R^K → R, then score = ∇_x Σ_i ψ(n^(L)_i)
-    """
-    def __init__(self, hidden_dim: int) -> None:
+class OutputHead(nn.Module):
+    def __init__(self, hidden_dim: int):
         super().__init__()
-        self.mlp = nn.Sequential(
+        self.node_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 3)
+        )
+        self.scale_mlp = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, node_features: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """maps each node to a scalar energy and sums over the molecule(s)."""
-        node_energy = self.mlp(node_features).squeeze(-1)  # (N,)
-        if batch is None:
-            return node_energy.sum()
-        else:
-            return scatter_add(node_energy, batch, dim=0)
+    def forward(self, node_features, positions):
+        base = self.node_mlp(node_features)
+        scale = self.scale_mlp(node_features)
+        return base + scale * positions
 
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(3, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+
+    def forward(self, data: torch.Tensor) -> torch.Tensor:
+        return self.mlp(data)
 
 
 class TimeEmbedding(nn.Module):
@@ -70,23 +82,26 @@ class TimeEmbedding(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(1, embed_dim),
             nn.SiLU(),
+            nn.Linear(embed_dim, embed_dim),
+            nn.SiLU(),
             nn.Linear(embed_dim, embed_dim)
         )
 
     def forward(self, time_: torch.Tensor) -> torch.Tensor:
         """
-        arguments:
-            time_: (batch_size,) or scalar
-        returns:
-            (batch_size, embed_dim) or (1, embed_dim)
+        time_: (B,) or (B, 1) or scalar
+        returns: (B, embed_dim)
         """
         if time_.dim() == 0:
             time_ = time_.unsqueeze(0)
+        if time_.dim() == 2:
+            time_ = time_.squeeze(-1)
         return self.mlp(time_.unsqueeze(-1))
 
 
 class SinusoidalTimeEmbedding(nn.Module):
     """sinusoidal time embedding"""
+
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.embed_dim = embed_dim
@@ -153,10 +168,10 @@ class GraphTransformer(nn.Module):
 
 class NodeInitializer(nn.Module):
     """initialize node embeddings: n_i^(0) = [a_i, t]"""
-
     def __init__(self, atom_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.atom_project = nn.Linear(atom_dim, hidden_dim)
+        #self.time_embed = TimeEmbedding(hidden_dim)
         self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
 
     def forward(self, atom_features: torch.Tensor, time_: torch.Tensor, num_nodes: int,
@@ -175,7 +190,10 @@ class NodeInitializer(nn.Module):
         if batch is not None:
             h_time = time_emb[batch]
         else:
-            h_time = time_emb.expand(num_nodes, -1)
+            if time_emb.shape[0] == num_nodes:
+                h_time = time_emb
+            else:
+                h_time = time_emb.expand(num_nodes, -1)
         return h_atom + h_time
 
 
@@ -189,7 +207,7 @@ def compute_edge_features(data: torch.Tensor, edge_index: torch.Tensor) -> torch
         (E, 4) [relative_x, relative_y, relative_z, distance]
     """
     i, j = edge_index
-    relative_pos = data[i] - data[j]  # e_ij = x_i - x_j (translation invariant)
+    relative_pos = data[i] - data[j]
     distance = torch.norm(relative_pos, dim=-1, keepdim=True)
     edge_features = torch.cat([relative_pos, distance], dim=-1)
     return edge_features

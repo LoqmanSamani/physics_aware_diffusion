@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from diffusion.reverse import ReverseVP
 from score_nets.tiny_unet import TinyUNet
-from samplers.diffusion_sampler import DiffusionSampler
+from samplers.mnist_sampler import MNISTSampler
 from diffusion.schedules import LinearVS
 from configs.load_config import load_config
 from pathlib import Path
@@ -33,7 +33,7 @@ score_net = TinyUNet(
 score_net.load_state_dict(checkpoint["score_net_state"])
 score_net.eval()
 
-sampler = DiffusionSampler(
+sampler = MNISTSampler(
     score_net=score_net,
     reverse_vp=reverse_vp,
     output_size=(28, 28),

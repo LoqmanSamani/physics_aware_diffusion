@@ -16,7 +16,8 @@ class EnergyNet(nn.Module):
         self.layers = nn.ModuleList([
             GraphTransformer(hidden_dim, dropout) for _ in range(num_layers)
         ])
-        self.energy_head = EnergyHead(hidden_dim)
+        #self.energy_head = EnergyHead(hidden_dim)
+        self.out_head = OutputHead(hidden_dim)
 
     def forward(self, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                 time_: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -35,7 +36,8 @@ class EnergyNet(nn.Module):
         edges = compute_edge_features(data, edge_index)
         for layer in self.layers:
             nodes = layer(nodes, edges, edge_index)
-        logp = self.energy_head(nodes, batch)
+        #logp = self.energy_head(nodes, batch)
+        logp = self.out_head(nodes, batch)
         return logp
 
 
@@ -55,6 +57,20 @@ class EnergyHead(nn.Module):
             return node_energy.sum()
         else:
             return scatter_add(node_energy, batch, dim=0)
+
+
+class OutputHead(nn.Module):
+    """used in models with no energy computation"""
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 3)
+        )
+
+    def forward(self, node_features: torch.Tensor, *args) -> torch.Tensor:
+            return self.mlp(node_features)
 
 
 class TimeEmbedding(nn.Module):

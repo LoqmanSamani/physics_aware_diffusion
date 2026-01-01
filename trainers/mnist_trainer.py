@@ -6,7 +6,7 @@ import os
 from typing import Callable
 
 
-class DiffusionTrainer(nn.Module):
+class MNISTTrainer(nn.Module):
     """trainer for the variance preserving diffusion model"""
     def __init__(self, score_net: torch.nn.Module, forward_vp: torch.nn.Module,
                  data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer,
