@@ -5,7 +5,7 @@ import math
 from typing import Optional
 
 
-class EnergyNet(nn.Module):
+class GraphEnergyNet(nn.Module):
     """
     energy-based graph transformer for conservative score parameterization.
     the score is computed as: s_θ(x,t) = ∇_x log p_θ(x,t) = ∇_x E_θ(x,t)
@@ -13,6 +13,7 @@ class EnergyNet(nn.Module):
     """
     def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
         super().__init__()
+        self.position_encoder = PositionalEncoding(hidden_dim)
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
             GraphTransformer(hidden_dim, dropout) for _ in range(num_layers)
@@ -32,10 +33,13 @@ class EnergyNet(nn.Module):
             scalar log p_theta(x,t) - the energy function
         """
         num_nodes = data.size(0)
+        pos_features = self.position_encoder(data)
         nodes = self.initializer(atom_features, time_, num_nodes, batch)
-        edges = compute_edge_features(data, edge_index)
-        for layer in self.layers:
-            nodes = layer(nodes, edges, edge_index)
+        nodes = nodes + pos_features
+        if edge_index.numel() > 0:
+            edges = compute_edge_features(data, edge_index)
+            for layer in self.layers:
+                nodes = layer(nodes, edges, edge_index)
         logp = self.energy_head(nodes, batch)
         return logp
 
@@ -50,6 +54,8 @@ class EnergyHead(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
             nn.Linear(hidden_dim, 1)
         )
 
@@ -62,26 +68,43 @@ class EnergyHead(nn.Module):
             return scatter_add(node_energy, batch, dim=0)
 
 
+class PositionalEncoding(nn.Module):
+    """encode 3d positions into high-dimensional features"""
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(3, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+
+    def forward(self, data: torch.Tensor) -> torch.Tensor:
+        return self.mlp(data)
+
 
 class TimeEmbedding(nn.Module):
-    """simple mlp-based time embedding"""
+    """time embedding"""
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(1, embed_dim),
+            nn.SiLU(),
+            nn.Linear(embed_dim, embed_dim),
             nn.SiLU(),
             nn.Linear(embed_dim, embed_dim)
         )
 
     def forward(self, time_: torch.Tensor) -> torch.Tensor:
         """
-        arguments:
-            time_: (batch_size,) or scalar
-        returns:
-            (batch_size, embed_dim) or (1, embed_dim)
+        time_: (B,) or (B, 1) or scalar
+        returns: (B, embed_dim)
         """
         if time_.dim() == 0:
             time_ = time_.unsqueeze(0)
+        if time_.dim() == 2:
+            time_ = time_.squeeze(-1)
         return self.mlp(time_.unsqueeze(-1))
 
 
@@ -189,7 +212,7 @@ def compute_edge_features(data: torch.Tensor, edge_index: torch.Tensor) -> torch
         (E, 4) [relative_x, relative_y, relative_z, distance]
     """
     i, j = edge_index
-    relative_pos = data[i] - data[j]  # e_ij = x_i - x_j (translation invariant)
+    relative_pos = data[i] - data[j]
     distance = torch.norm(relative_pos, dim=-1, keepdim=True)
     edge_features = torch.cat([relative_pos, distance], dim=-1)
     return edge_features

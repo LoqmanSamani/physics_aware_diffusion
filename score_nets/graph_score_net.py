@@ -5,8 +5,8 @@ import math
 from typing import Optional
 
 
-class ScoreGraphNet(nn.Module):
-    """score graph transformer"""
+class GraphScoreNet(nn.Module):
+    """graph score transformer"""
     def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
         super().__init__()
         self.position_encoder = PositionalEncoding(hidden_dim)

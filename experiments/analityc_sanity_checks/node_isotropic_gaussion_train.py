@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from score_nets.graph_score_net import ScoreGraphNet
+from score_nets.graph_score_net import GraphScoreNet
 from trainers.node_score_trainer import AnalyticScoreTrainer
 from pathlib import Path
 from configs.load_config import load_config
@@ -52,7 +52,7 @@ data_loader = DataLoader(
     shuffle=True
 )
 
-score_net = ScoreGraphNet(
+score_net = GraphScoreNet(
     atom_dim=cfg["model"]["atom_dim"],
     hidden_dim=cfg["model"]["hidden_dim"],
     num_layers=cfg["model"]["num_layers"],
