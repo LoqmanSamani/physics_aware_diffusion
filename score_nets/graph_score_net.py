@@ -5,11 +5,12 @@ import math
 from typing import Optional
 
 
+
 class GraphScoreNet(nn.Module):
-    """graph score transformer"""
-    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
+    """graph score transformer for molecular diffusion"""
+    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1) -> None:
         super().__init__()
-        self.position_encoder = PositionalEncoding(hidden_dim)
+        self.pos_encoder = PositionalEncoding(hidden_dim)
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
             GraphTransformer(hidden_dim, dropout) for _ in range(num_layers)
@@ -18,44 +19,49 @@ class GraphScoreNet(nn.Module):
 
     def forward(self, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                 time_: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        arguments:
+            data: (N, 3) atomic positions (NOISY)
+            atom_features: (N, atom_dim) atom features
+            edge_index: (2, E) edge connectivity
+            time_: (batch_size,) normalized diffusion timestep [0, 1]
+            batch: (N,) batch assignment
+        returns:
+            (N, 3) predicted noise
+        """
         num_nodes = data.size(0)
-        pos_features = self.position_encoder(data)
-        nodes = self.initializer(atom_features, time_, num_nodes, batch)
-        nodes = nodes + pos_features
+        h_pos = self.pos_encoder(data)
+        #h_pos = self.pos_encoder(data / (torch.norm(data, dim=-1, keepdim=True) + 1e-6))
+        h_atom_time = self.initializer(atom_features, time_, num_nodes, batch)
+        nodes = h_pos + h_atom_time
         if edge_index.numel() > 0:
             edges = compute_edge_features(data, edge_index)
             for layer in self.layers:
                 nodes = layer(nodes, edges, edge_index)
-        score = self.out_head(nodes, data)
+        score = self.out_head(nodes)
         return score
 
 
 class OutputHead(nn.Module):
+    """simple mlp head that outputs 3d noise prediction"""
     def __init__(self, hidden_dim: int) -> None:
         super().__init__()
-        self.coeff_mlp = nn.Sequential(
+        self.mlp = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, 3)
         )
-        self.bias_mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, 3)
-        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
 
-    def forward(self, node_features: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        coeff = self.coeff_mlp(node_features)
-        bias = self.bias_mlp(node_features)
-        score = coeff * positions + bias
-        return score
+    def forward(self, node_features: torch.Tensor) -> torch.Tensor:
+        return self.mlp(node_features)
 
 
 class PositionalEncoding(nn.Module):
     """encode 3d positions into high-dimensional features"""
-
     def __init__(self, hidden_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
@@ -71,12 +77,12 @@ class PositionalEncoding(nn.Module):
 
 
 class SinusoidalTimeEmbedding(nn.Module):
-    """sinusoidal time embedding"""
+    """sinusoidal time embedding for diffusion timesteps"""
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.embed_dim = embed_dim
 
-    def forward(self, t):
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
         if t.dim() == 0:
             t = t.unsqueeze(0)
         half_dim = self.embed_dim // 2
@@ -86,9 +92,8 @@ class SinusoidalTimeEmbedding(nn.Module):
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
         return emb
 
-
 class TimeEmbedding(nn.Module):
-    """time embedding"""
+    """time embedding for diffusion timesteps"""
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.mlp = nn.Sequential(
@@ -100,10 +105,6 @@ class TimeEmbedding(nn.Module):
         )
 
     def forward(self, time_: torch.Tensor) -> torch.Tensor:
-        """
-        time_: (B,) or (B, 1) or scalar
-        returns: (B, embed_dim)
-        """
         if time_.dim() == 0:
             time_ = time_.unsqueeze(0)
         if time_.dim() == 2:
@@ -112,7 +113,7 @@ class TimeEmbedding(nn.Module):
 
 
 class GraphTransformer(nn.Module):
-    """attention-based message passing layer."""
+    """attention-based message passing layer"""
     def __init__(self, hidden_dim: int, dropout: float = 0.1) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -134,6 +135,14 @@ class GraphTransformer(nn.Module):
 
     def forward(self, nodes: torch.Tensor, edges: torch.Tensor,
                 edge_index: torch.Tensor) -> torch.Tensor:
+        """
+        arguments:
+            nodes: (N, hidden_dim) node embeddings
+            edges: (E, 4) edge features [dx, dy, dz, distance]
+            edge_index: (2, E) edge connectivity
+        returns:
+            (N, hidden_dim) updated node embeddings
+        """
         i, j = edge_index
         query_i = self.query(nodes[i])
         key_j = self.key(nodes[j])
@@ -144,7 +153,8 @@ class GraphTransformer(nn.Module):
         attn = self.dropout(attn)
         message = attn.unsqueeze(-1) * (value_j + edge_ij)
         agg = torch.zeros_like(nodes)
-        agg = scatter_add(message, i, dim=0, out=agg)
+        #agg = scatter_add(message, i, dim=0, out=agg)
+        agg = scatter_add(message, i, dim=0, out=agg.to(message.dtype))
         nodes = self.norm1(nodes + self.output(agg))
         nodes = self.norm2(nodes + self.feedforward(nodes))
         return nodes
@@ -163,7 +173,7 @@ class NodeInitializer(nn.Module):
         """
         arguments:
             atom_features: (N, atom_dim)
-            time_: (batch_size,) or scalar diffusion timestep
+            time_: (batch_size,) normalized timesteps [0, 1]
             num_nodes: int, number of nodes
             batch: (N,) batch assignment (optional)
         returns:
@@ -183,7 +193,7 @@ class NodeInitializer(nn.Module):
 
 def compute_edge_features(data: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
     """
-    compute translation-invariant edge features: e_ij = x_i - x_j
+    compute translation-invariant edge features: e_ij = [x_i - x_j, ||x_i - x_j||]
     arguments:
         data: (N, 3) atomic coordinates
         edge_index: (2, E) edge connectivity

@@ -60,6 +60,7 @@ dataset = GaussianPyGDataset(
     n_samples=cfg["dataset"]["n_samples"],
     min_nodes=cfg["dataset"]["min_nodes"],
     max_nodes=cfg["dataset"]["max_nodes"])
+
 data_loader = DataLoader(
     dataset,
     batch_size=cfg["training"]["batch_size"],

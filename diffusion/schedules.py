@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 
 
 
@@ -41,4 +42,39 @@ class LinearVS(nn.Module):
 
     def get_diffusion_coeff(self, t_index: torch.Tensor) -> torch.Tensor:
         """get diffusion coefficient: √β(t)"""
+        return torch.sqrt(self.betas[t_index])
+
+
+
+
+class CosineVS(nn.Module):
+    """cosine variance schedule"""
+    def __init__(self, num_steps: int = 1000, s: float = 0.008):
+        super().__init__()
+        self.num_steps = num_steps
+        self.s = s
+        t = torch.linspace(0, 1, num_steps)
+        alphas_cumprod = torch.cos((t + s) / (1 + s) * np.pi / 2) ** 2
+
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+
+        variance = 1 - alphas_cumprod
+        betas = torch.cat([
+            torch.tensor([0.0]),
+            1 - alphas_cumprod[1:] / alphas_cumprod[:-1]
+        ])
+        self.register_buffer("alphas_cumprod", alphas_cumprod)
+        self.register_buffer("variance", variance)
+        self.register_buffer("betas", betas)
+
+    def get_variance(self, t_index: torch.Tensor) -> torch.Tensor:
+        return self.variance[t_index]
+
+    def get_std(self, t_index: torch.Tensor) -> torch.Tensor:
+        return torch.sqrt(self.variance[t_index])
+
+    def get_drift_coeff(self, t_index: torch.Tensor) -> torch.Tensor:
+        return -0.5 * self.betas[t_index]
+
+    def get_diffusion_coeff(self, t_index: torch.Tensor) -> torch.Tensor:
         return torch.sqrt(self.betas[t_index])
