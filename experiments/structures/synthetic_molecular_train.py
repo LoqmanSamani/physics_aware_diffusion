@@ -4,7 +4,7 @@ from trainers.molecule_score_net_trainer import MolScoreTrainer
 from score_nets.graph_score_net import GraphScoreNet
 from diffusion.forward import ForwardVP
 from diffusion.schedules import LinearVS
-from losses.dsm import min_snr_weighted_loss
+from losses.dsm_losses import min_snr_weighted_loss
 from pathlib import Path
 from configs.load_config import load_config
 
