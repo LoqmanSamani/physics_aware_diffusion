@@ -54,9 +54,9 @@ def weak_fp_residual(energy_net: nn.Module, data: torch.Tensor, atom_features: t
 
 def score_from_energy(logp: torch.Tensor, data: torch.Tensor) -> torch.Tensor:
     """
-    compute score function: s_θ(x,t) = ∇_x log p_θ(x,t)
+    score function: computes score from energy: s_θ(x,t) = ∇_x log p_θ(x,t)
     arguments:
-        logp: scalar or (batch_size,) tensor of log probabilities
+        logp: scalar or (batch_size,) tensor of log probabilities (output of energy net)
         data: (N, 3) coordinates that require gradients
     returns:
         (N, 3) score vectors ∇_x log p_θ(x,t)
