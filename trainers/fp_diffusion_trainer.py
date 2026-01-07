@@ -10,18 +10,19 @@ import os
 
 
 class FPEnergyTrainer(nn.Module):
+    """main trainer of the model. 
+    used to train the original (teacher) model with fokker-planck regularization integrated"""
     def __init__(
             self,
             energy_net: nn.Module,
-            fp_gate: nn.Module,
+            fp_gate: nn.Module, # a simple mlp network used to specify where fp-regularization must be applied
             forward_vp: nn.Module,
             data_loader,
             optimizer: torch.optim.Optimizer,
-            fp_loss: Callable,
-            dsm_loss: Callable,
-            score_fn: Callable,
-            fp_residual: Callable,
-            rr_matrix: Callable,
+            fp_loss: Callable, # fokker-planck loss
+            dsm_loss: Callable, # denoising score matching loss
+            score_fn: Callable,  # computes score from energy
+            fp_residual: Callable, # computes weak fokker-planck residuals
             epochs: int,
             device: torch.device | None = None,
             grad_acc: int = 1,
@@ -29,14 +30,15 @@ class FPEnergyTrainer(nn.Module):
             log_freq: int = 1,
             store_path: str = "./checkpoints",
             warmup_steps: int = 0,
-            gate_epochs: int = 10,
-            rotation_augment: bool = False,
+            gate_epochs: int = 10, # number of pretraining epochs in which fp-gate model will be trained
+            rotation_augment: bool = False, # if true molecules will be randomly augmented throw training
             gate_optimizer: Optional[torch.optim.Optimizer] = None,
             gate_loss: Optional[torch.nn.functional] = None,
-            lambda_fp: int = 1.0,
+            lambda_t = lambda t: 1.0,  # time-dependent weighting λ(t)
+            lambda_fp: int = 1.0, # used as fp-loss weight
             fp_threshold: float = 0.01,
             *args
-    ):
+    ) -> None:
         super().__init__()
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.energy_net = energy_net.to(self.device)
@@ -48,7 +50,6 @@ class FPEnergyTrainer(nn.Module):
         self.dsm_loss = dsm_loss
         self.score_fn = score_fn
         self.fp_residual = fp_residual
-        self.rr_matrix = rr_matrix
         self.epochs = epochs
         self.grad_acc = grad_acc
         self.checkpoint = checkpoint
@@ -57,10 +58,10 @@ class FPEnergyTrainer(nn.Module):
         self.warmup_steps = warmup_steps
         self.gate_epochs = gate_epochs
         self.rotation_augment = rotation_augment
-        self.lambda_fp = lambda_fp
+        self.lambda_t = lambda_t
         self.fp_threshold = fp_threshold
         self.gate_loss = gate_loss or torch.nn.functional.binary_cross_entropy
-        self.gate_optimizer = gate_optimizer or torch.oprim.Adam(self.fp_gate.parameters())
+        self.gate_optimizer = gate_optimizer or torch.optim.Adam(self.fp_gate.parameters(), lr=1e-4)
         self.global_step = 0
         self.base_lr = optimizer.param_groups[0]['lr']
         self.best_loss = float('inf')
@@ -72,46 +73,56 @@ class FPEnergyTrainer(nn.Module):
 
 
     def forward(self):
-        self.score_net.train()
+        self.energy_net.train()
         self.fp_gate.train()
-        for epoch in range(self.gate_epochs):
-            pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.gate_epochs}")
+        gate_epoch = 0
+        for gate_epoch in range(self.gate_epochs):
+            pbar = tqdm(self.data_loader, desc=f"Epoch {gate_epoch + 1}/{self.gate_epochs}")
             epoch_losses = self.gate_batch(pbar)
             mean_loss = sum(epoch_losses) / len(epoch_losses)
             self.gate_losses.append(mean_loss)
+            if (gate_epoch + 1) % self.log_freq == 0:
+                lr = self.gate_optimizer.param_groups[0]['lr']
+                print(f"Epoch: {gate_epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
+            gate_epoch += 1
 
         self.fp_gate.eval()
         for epoch in range(self.epochs):
-            pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
+            pbar = tqdm(self.data_loader, desc=f"Epoch {gate_epoch + epoch + 1}/{self.epochs}")
             epoch_losses = self.train_batch(pbar)
             mean_loss = sum(epoch_losses) / len(epoch_losses)
-
-
-
-
-
-
-
+            self.losses.append(mean_loss)
+            if (gate_epoch + epoch + 1) % self.log_freq == 0:
+                lr = self.optimizer.param_groups[0]['lr']
+                print(f"Epoch: {gate_epoch + epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
+            if (gate_epoch + epoch + 1) % self.checkpoint == 0:
+                self.save_checkpoint(gate_epoch + epoch + 1, mean_loss)
+            if mean_loss < self.best_loss:
+                self.best_loss = mean_loss
+                self.save_checkpoint(gate_epoch + epoch + 1, mean_loss, is_best=True)
+        return self.losses, self.gate_losses
 
     def train_batch(self, pbar):
         epoch_losses = []
         for step, batch in enumerate(pbar):
-            x0 = batch.coords.to(self.device)
-            atom_features = batch.atom_features.to(self.device)
+            #x0 = batch.coords.to(self.device)
+            x0 = batch.pos.to(self.device)
+            #atom_features = batch.atom_features.to(self.device)
+            atom_features = batch.x.to(self.device)
             edge_index = batch.edge_index.to(self.device)
-            batch = batch.batch.to(self.device)
+            batch_idx = batch.batch.to(self.device)
             num_molecules = batch.num_graphs
             if self.use_amp:
                 with torch.amp.autocast('cuda'):
-                    step_loss = self.train_step(x0, atom_features, edge_index, batch, num_molecules) / self.grad_acc
+                    step_loss = self.train_step(x0, atom_features, edge_index, batch_idx, num_molecules) / self.grad_acc
                 self.scaler.scale(step_loss).backward()
             else:
-                step_loss = self.train_step(x0, atom_features, edge_index, batch, num_molecules) / self.grad_acc
+                step_loss = self.train_step(x0, atom_features, edge_index, batch_idx, num_molecules) / self.grad_acc
                 step_loss.backward()
             if (step + 1) % self.grad_acc == 0:
                 if self.use_amp:
                     self.scaler.unscale_(self.optimizer)
-                clip_grad_norm_(self.score_net.parameters(), max_norm=1.0)
+                clip_grad_norm_(self.energy_net.parameters(), max_norm=1.0)
                 if self.use_amp:
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
@@ -119,21 +130,24 @@ class FPEnergyTrainer(nn.Module):
                     self.optimizer.step()
                 self.optimizer.zero_grad()
                 self.global_step += 1
-                self._update_learning_rate()
+                self.update_learning_rate()
             epoch_losses.append(step_loss.item() * self.grad_acc)
             pbar.set_postfix({'loss': f'{step_loss.item() * self.grad_acc:.4f}'})
-            pbar.close()
+        if self.global_step >= self.warmup_steps:
+            self.scheduler.step()
         return epoch_losses
 
     def gate_batch(self, pbar):
         epoch_losses = []
         for step, batch in enumerate(pbar):
-            x0 = batch.coords.to(self.device)
-            atom_features = batch.atom_features.to(self.device)
+            # x0 = batch.coords.to(self.device)
+            x0 = batch.pos.to(self.device)
+            #atom_features = batch.atom_features.to(self.device)
+            atom_features = batch.x.to(self.device)
             edge_index = batch.edge_index.to(self.device)
-            batch = batch.batch.to(self.device)
+            batch_idx = batch.batch.to(self.device)
             num_molecules = batch.num_graphs
-            step_loss = self.gate_step(x0, atom_features, edge_index, batch, num_molecules)
+            step_loss = self.gate_step(x0, atom_features, edge_index, batch_idx, num_molecules)
             step_loss.backward()
             clip_grad_norm_(self.fp_gate.parameters(), max_norm=1.0)
             self.gate_optimizer.step()
@@ -141,7 +155,6 @@ class FPEnergyTrainer(nn.Module):
             self.global_step += 1
             epoch_losses.append(step_loss.item())
             pbar.set_postfix({'loss': f'{step_loss.item():.4f}'})
-            pbar.close()
         return epoch_losses
 
 
@@ -152,28 +165,26 @@ class FPEnergyTrainer(nn.Module):
         t_per_atom = t[batch]
         t_norm_per_atom = t_per_atom.float() / (self.forward_vp.vs.num_steps - 1)
         xt, true_score = self.forward_vp(x0, noise, t_per_atom)
-        logp = self.score_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
         xt.requires_grad_(True)
+        logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
         pred_score = self.score_fn(logp, xt)
+        fp_residual1 = self.fp_residual(
+            self.energy_net, x0, atom_features, edge_index, t, batch, self.forward_vp.vs
+        )
+        fp_residual2 = self.fp_residual(
+            self.energy_net, x0, atom_features, edge_index, t, batch, self.forward_vp.vs
+        )
         with torch.no_grad():
-            gate_features = self.fp_gate.fp_gate_features_molecular(
-                xt.detach(), t_norm_per_atom, pred_score.detach(), batch, num_molecules
+            gate_features = self.fp_gate.fp_gate_features(
+                xt.detach(), t, pred_score.detach(), batch, num_molecules
             )
-            gate_prob = self.fp_gate(gate_features)
-            fp_residual1 = self.fp_residual(
-                self.energy_net, x0, atom_features, edge_index, t, batch, self.forward_vp.vs
-            )
-            fp_residual2 = self.fp_residual(
-                self.energy_net, x0, atom_features, edge_index, t, batch, self.forward_vp.vs
-            )
-            # fp_loss = self.fp_loss(fp_residual1, fp_residual2, x0.numel())
+        gate_prob = self.fp_gate(gate_features)
+        with torch.no_grad():
             residual_per_mol = scatter_mean((fp_residual1.abs() + fp_residual2.abs()) / 2, batch, dim=0)
             oracle_label = (residual_per_mol > self.fp_threshold).float().unsqueeze(-1)
         gate_loss = self.gate_loss(gate_prob, oracle_label)
-        #self.gate_optimizer.zero_grad()
-        #gate_loss.backward()
-        #self.gate_optimizer.step()
         return gate_loss
+
 
     def train_step(self, x0: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                    batch: torch.Tensor, num_molecules: int) -> torch.Tensor:
@@ -181,8 +192,8 @@ class FPEnergyTrainer(nn.Module):
         t = torch.randint(1, self.forward_vp.vs.num_steps, (num_molecules,), device=self.device)
         t_per_atom = t[batch]
         t_norm_per_atom = t_per_atom.float() / (self.forward_vp.vs.num_steps - 1)
-        if self.rotation_augmentation:
-            R = self.random_rotation_matrix(num_molecules, self.device)
+        if self.rotation_augment:
+            R = self.random_rotation_matrix(num_molecules)
             for mol_idx in range(num_molecules):
                 mask = batch == mol_idx
                 x0[mask] = x0[mask] @ R[mol_idx].T
@@ -192,14 +203,16 @@ class FPEnergyTrainer(nn.Module):
         variance = self.forward_vp.vs.get_variance(t_per_atom)
         while std_per_atom.dim() < noise.dim():
             std_per_atom = std_per_atom.unsqueeze(-1)
-        logp = self.score_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
         xt.requires_grad_(True)
+        logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
         pred_score = self.score_fn(logp, xt)
-        dsm_loss = self.dsm_loss(pred_score, true_score, variance, batch)
+        dsm_loss_ = self.dsm_loss(pred_score, true_score, variance, batch)
+        weight = self.lambda_t(t_norm_per_atom.mean().item())
+        dsm_loss = weight * dsm_loss_ # weightened loss
         fp_loss = torch.tensor(0.0, device=self.device)
         with torch.no_grad():
             gate_features = self.fp_gate.fp_gate_features(
-                xt.detach(), t_norm_per_atom, pred_score.detach(), batch, num_molecules
+                xt.detach(), t, pred_score.detach(), batch, num_molecules
             )
             gate_prob = self.fp_gate(gate_features)
         apply_fp_mask = (gate_prob > 0.5).squeeze(-1)
@@ -217,8 +230,11 @@ class FPEnergyTrainer(nn.Module):
                 self.energy_net, x0_active, atom_feat_active, edge_idx_active,
                 t_active, batch_active, self.forward_vp.vs
             )
-            fp_loss = self.fp_loss(fp_residual1, fp_residual2, x0_active.numel())
-        return dsm_loss + self.lambda_fp * fp_loss
+            fp_loss_ = self.fp_loss(fp_residual1, fp_residual2, x0_active.numel())
+            t_norm_active = t_active.float() / (self.forward_vp.vs.num_steps - 1)
+            weight_ = self.lambda_t(t_norm_active.mean().item())
+            fp_loss = weight_ * fp_loss_  # weightened loss
+        return dsm_loss + fp_loss
 
     def subset_graph_data(self, x0, atom_features, edge_index, batch, active_atom_mask, active_mol_indices):
         x0_active = x0[active_atom_mask]
@@ -235,20 +251,41 @@ class FPEnergyTrainer(nn.Module):
         t_active = active_mol_indices
         return x0_active, atom_feat_active, edge_idx_active, batch_active, t_active
 
-    def random_rotation_matrix(self, batch_size: int, device: str) -> torch.Tensor:
+    def random_rotation_matrix(self, batch_size: int) -> torch.Tensor:
         """generate random 3D rotation matrices using QR decomposition"""
-        M = torch.randn(batch_size, 3, 3, device=device)
+        M = torch.randn(batch_size, 3, 3, device=self.device)
         Q, R = torch.linalg.qr(M)
         det = torch.det(Q)
         Q = Q * det.view(-1, 1, 1).sign()
         return Q
 
-    def _update_learning_rate(self):
+    def update_learning_rate(self):
         """linear warmup"""
         if self.warmup_steps > 0 and self.global_step < self.warmup_steps:
             lr = self.base_lr * (self.global_step + 1) / self.warmup_steps
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = lr
+
+    def save_checkpoint(self, epoch: int, loss: float, is_best: bool = False) -> None:
+        checkpoint = {
+            'epoch': epoch,
+            'energy_net_state': self.energy_net.state_dict(),
+            'fp_gate': self.fp_gate.state_dict(),
+            'optimizer_state': self.optimizer.state_dict(),
+            'loss': loss,
+            'losses': self.losses,
+            'gate_losses': self.gate_losses,
+            'scheduler': self.forward_vp.vs.state_dict(),
+            'epochs': self.epochs
+        }
+        filename = "fpd_best.pth" if is_best else f"fpd_epoch_{epoch}.pth"
+        filepath = os.path.join(self.store_path, filename)
+        os.makedirs(self.store_path, exist_ok=True)
+        torch.save(checkpoint, filepath)
+        if is_best:
+            print(f"Best model saved at epoch {epoch} with loss {loss:.4f}")
+        else:
+            print(f"Checkpoint saved at epoch {epoch}")
 
 
 

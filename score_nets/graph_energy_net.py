@@ -21,7 +21,7 @@ class GraphEnergyNet(nn.Module):
         self.energy_head = EnergyHead(hidden_dim)
 
     def forward(self, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
-                time_: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
+                time_: torch.Tensor, batch: Optional[torch.Tensor] = None, reduce: bool = True) -> torch.Tensor:
         """
         arguments:
             data: (N, 3) molecular coordinates
@@ -40,9 +40,8 @@ class GraphEnergyNet(nn.Module):
             edges = compute_edge_features(data, edge_index)
             for layer in self.layers:
                 nodes = layer(nodes, edges, edge_index)
-        logp = self.energy_head(nodes, batch)
+        logp = self.energy_head(nodes, batch, reduce)
         return logp
-
 
 class EnergyHead(nn.Module):
     """
@@ -59,13 +58,14 @@ class EnergyHead(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, node_features: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """maps each node to a scalar energy and sums over the molecule(s)."""
-        node_energy = self.mlp(node_features).squeeze(-1)  # (N,)
-        if batch is None:
-            return node_energy.sum()
-        else:
-            return scatter_add(node_energy, batch, dim=0)
+    def forward(self, node_features: torch.Tensor, batch: Optional[torch.Tensor] = None, reduce: bool = True) -> torch.Tensor:
+        """maps each node to a scalar energy and optionally sums over the molecule(s)."""
+        node_energy = self.mlp(node_features).squeeze(-1)  # (num_atoms,)
+
+        if not reduce or batch is None:
+            return node_energy
+
+        return scatter_add(node_energy, batch, dim=0)
 
 
 class PositionalEncoding(nn.Module):
