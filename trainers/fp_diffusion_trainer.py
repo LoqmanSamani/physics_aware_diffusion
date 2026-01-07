@@ -23,6 +23,7 @@ class FPEnergyTrainer(nn.Module):
             dsm_loss: Callable, # denoising score matching loss
             score_fn: Callable,  # computes score from energy
             fp_residual: Callable, # computes weak fokker-planck residuals
+            val_loader: None,
             epochs: int,
             device: torch.device | None = None,
             grad_acc: int = 1,
@@ -35,8 +36,7 @@ class FPEnergyTrainer(nn.Module):
             gate_optimizer: Optional[torch.optim.Optimizer] = None,
             gate_loss: Optional[torch.nn.functional] = None,
             lambda_t = lambda t: 1.0,  # time-dependent weighting λ(t)
-            lambda_fp: int = 1.0, # used as fp-loss weight
-            fp_threshold: float = 0.01,
+            fp_quantile: float = 0.7, # top 30 percent get fokker-planck regularization
             *args
     ) -> None:
         super().__init__()
@@ -45,6 +45,7 @@ class FPEnergyTrainer(nn.Module):
         self.fp_gate = fp_gate.to(self.device)
         self.forward_vp = forward_vp.to(self.device)
         self.data_loader = data_loader
+        self.val_loader = val_loader
         self.optimizer = optimizer
         self.fp_loss = fp_loss
         self.dsm_loss = dsm_loss
@@ -59,7 +60,7 @@ class FPEnergyTrainer(nn.Module):
         self.gate_epochs = gate_epochs
         self.rotation_augment = rotation_augment
         self.lambda_t = lambda_t
-        self.fp_threshold = fp_threshold
+        self.fp_quantile = fp_quantile
         self.gate_loss = gate_loss or torch.nn.functional.binary_cross_entropy
         self.gate_optimizer = gate_optimizer or torch.optim.Adam(self.fp_gate.parameters(), lr=1e-4)
         self.global_step = 0
@@ -70,36 +71,41 @@ class FPEnergyTrainer(nn.Module):
         self.scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
         self.gate_losses = []
         self.losses = []
+        self.val_losses = []
+        self.gate_accuracy = []
+        self.fp_application_rate = []
 
 
     def forward(self):
         self.energy_net.train()
         self.fp_gate.train()
-        gate_epoch = 0
-        for gate_epoch in range(self.gate_epochs):
-            pbar = tqdm(self.data_loader, desc=f"Epoch {gate_epoch + 1}/{self.gate_epochs}")
+        for epoch in range(self.gate_epochs):
+            pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.gate_epochs}")
             epoch_losses = self.gate_batch(pbar)
             mean_loss = sum(epoch_losses) / len(epoch_losses)
             self.gate_losses.append(mean_loss)
-            if (gate_epoch + 1) % self.log_freq == 0:
+            if (epoch + 1) % self.log_freq == 0:
                 lr = self.gate_optimizer.param_groups[0]['lr']
-                print(f"Epoch: {gate_epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
-            gate_epoch += 1
+                print(f"Epoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
 
         self.fp_gate.eval()
         for epoch in range(self.epochs):
-            pbar = tqdm(self.data_loader, desc=f"Epoch {gate_epoch + epoch + 1}/{self.epochs}")
+            pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             epoch_losses = self.train_batch(pbar)
             mean_loss = sum(epoch_losses) / len(epoch_losses)
             self.losses.append(mean_loss)
-            if (gate_epoch + epoch + 1) % self.log_freq == 0:
+            if (epoch + 1) % self.log_freq == 0:
                 lr = self.optimizer.param_groups[0]['lr']
-                print(f"Epoch: {gate_epoch + epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
-            if (gate_epoch + epoch + 1) % self.checkpoint == 0:
-                self.save_checkpoint(gate_epoch + epoch + 1, mean_loss)
+                print(f"Epoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
+                if self.val_loader is not None:
+                    val_loss = self.validate()
+                    self.val_losses.append(val_loss)
+                    print(f" | Val Loss: {val_loss: .4f}")
+            if (epoch + 1) % self.checkpoint == 0:
+                self.save_checkpoint(epoch + 1, mean_loss)
             if mean_loss < self.best_loss:
                 self.best_loss = mean_loss
-                self.save_checkpoint(gate_epoch + epoch + 1, mean_loss, is_best=True)
+                self.save_checkpoint(epoch + 1, mean_loss, is_best=True)
         return self.losses, self.gate_losses
 
     def train_batch(self, pbar):
@@ -181,7 +187,8 @@ class FPEnergyTrainer(nn.Module):
         gate_prob = self.fp_gate(gate_features)
         with torch.no_grad():
             residual_per_mol = scatter_mean((fp_residual1.abs() + fp_residual2.abs()) / 2, batch, dim=0)
-            oracle_label = (residual_per_mol > self.fp_threshold).float().unsqueeze(-1)
+            fp_threshold = torch.quantile(residual_per_mol, self.fp_quantile)
+            oracle_label = (residual_per_mol > fp_threshold).float().unsqueeze(-1)
         gate_loss = self.gate_loss(gate_prob, oracle_label)
         return gate_loss
 
@@ -207,6 +214,7 @@ class FPEnergyTrainer(nn.Module):
         logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
         pred_score = self.score_fn(logp, xt)
         dsm_loss_ = self.dsm_loss(pred_score, true_score, variance, batch)
+        #print(dsm_loss_)
         weight = self.lambda_t(t_norm_per_atom.mean().item())
         dsm_loss = weight * dsm_loss_ # weightened loss
         fp_loss = torch.tensor(0.0, device=self.device)
@@ -234,7 +242,52 @@ class FPEnergyTrainer(nn.Module):
             t_norm_active = t_active.float() / (self.forward_vp.vs.num_steps - 1)
             weight_ = self.lambda_t(t_norm_active.mean().item())
             fp_loss = weight_ * fp_loss_  # weightened loss
+
+            fp_residual_oracle = self.fp_residual(
+                self.energy_net, x0_active, atom_feat_active, edge_idx_active,
+                t_active, batch_active, self.forward_vp.vs
+            )
+            #residual_per_mol = scatter_mean(fp_residual_oracle.abs(), batch, dim=0)
+            residual_per_mol = scatter_mean(
+                fp_residual_oracle.abs(), batch_active, dim=0, dim_size=len(active_mol_indices),
+            )
+            fp_threshold = torch.quantile(residual_per_mol, self.fp_quantile)
+            oracle_label = (residual_per_mol > fp_threshold).float()
+            gate_pred = (gate_prob.squeeze(-1) > 0.5).float()
+            accuracy = (gate_pred == oracle_label).float().mean()
+            self.gate_accuracy.append(accuracy.item())
+            fp_rate = apply_fp_mask.float().mean().item()
+            self.fp_application_rate.append(fp_rate)
+        #print(dsm_loss, fp_loss)
         return dsm_loss + fp_loss
+
+    def validate(self):
+        """validation without fp regularization"""
+        #self.energy_net.eval()
+        val_losses = []
+        for batch in self.val_loader:
+            # x0 = batch.coords.to(self.device)
+            x0 = batch.pos.to(self.device)
+            # atom_features = batch.atom_features.to(self.device)
+            atom_features = batch.x.to(self.device)
+            edge_index = batch.edge_index.to(self.device)
+            batch_idx = batch.batch.to(self.device)
+            num_molecules = batch.num_graphs
+            noise = torch.randn_like(x0)
+            t = torch.randint(1, self.forward_vp.vs.num_steps, (num_molecules,), device=self.device)
+            t_per_atom = t[batch_idx]
+            t_norm_per_atom = t_per_atom.float() / (self.forward_vp.vs.num_steps - 1)
+            xt, true_score = self.forward_vp(x0, noise, t_per_atom)
+            variance = self.forward_vp.vs.get_variance(t_per_atom)
+            xt.requires_grad_(True)
+            logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch_idx)
+            pred_score = self.score_fn(logp, xt)
+            loss_ = self.dsm_loss(pred_score, true_score, variance, batch_idx)
+            weight = self.lambda_t(t_norm_per_atom.mean().item())
+            loss = weight * loss_
+            val_losses.append(loss.item())
+        #self.energy_net.train()
+        return sum(val_losses) / len(val_losses)
 
     def subset_graph_data(self, x0, atom_features, edge_index, batch, active_atom_mask, active_mol_indices):
         x0_active = x0[active_atom_mask]
@@ -270,13 +323,16 @@ class FPEnergyTrainer(nn.Module):
         checkpoint = {
             'epoch': epoch,
             'energy_net_state': self.energy_net.state_dict(),
-            'fp_gate': self.fp_gate.state_dict(),
+            'fp_gate_state': self.fp_gate.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
             'loss': loss,
             'losses': self.losses,
             'gate_losses': self.gate_losses,
             'scheduler': self.forward_vp.vs.state_dict(),
-            'epochs': self.epochs
+            'epochs': self.epochs,
+            'gate_accuracy': self.gate_accuracy,
+            'fp_application_rate': self.fp_application_rate,
+            'val_losses': self.val_losses
         }
         filename = "fpd_best.pth" if is_best else f"fpd_epoch_{epoch}.pth"
         filepath = os.path.join(self.store_path, filename)

@@ -23,6 +23,12 @@ dataloader = create_dataloader(
     shuffle=True
 )
 
+val_loader = create_dataloader(
+    dataset = dataset,
+    batch_size = 8,
+    shuffle=True
+)
+
 vs = LinearVS(
     num_steps=1000,
     beta_start=0.1,
@@ -44,13 +50,13 @@ e_net = GraphEnergyNet(
 
 e_optim = torch.optim.AdamW(
     e_net.parameters(),
-    lr=1e-4,
+    lr=1e-3,
     weight_decay=1e-4,
     betas=(0.9, 0.999)
 )
 g_optim = torch.optim.AdamW(
     g_net.parameters(),
-    lr=1e-6,
+    lr=1e-4,
     weight_decay=1e-4,
     betas=(0.9, 0.999)
 )
@@ -61,22 +67,22 @@ trainer = FPEnergyTrainer(
     fp_gate = g_net,
     forward_vp = fwd,
     data_loader = dataloader,
+    val_loader = val_loader,
     optimizer = e_optim,
     fp_loss = energy_fokker_planck_loss,
     dsm_loss = min_snr_weighted_loss,
     score_fn = score_from_energy,
     fp_residual = weak_fp_residual,
-    epochs = 50,
+    epochs = 30,
     grad_acc = 2,
     checkpoint = 10,
-    log_freq = 1,
+    log_freq = 2,
     store_path = "./checkpoints",
     warmup_steps = 300,
     gate_epochs = 10,
     rotation_augment = False,
     gate_optimizer = g_optim,
-    lambda_t = lambda t: 1.0,
-    fp_threshold = 0.000001
+    lambda_t = lambda t: 0.1
 )
 
 losses = trainer()
