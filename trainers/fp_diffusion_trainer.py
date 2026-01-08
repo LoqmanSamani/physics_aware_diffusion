@@ -38,6 +38,7 @@ class FPEnergyTrainer(nn.Module):
             lambda_t = lambda t: 1.0,  # time-dependent weighting λ(t)
             fp_quantile: float = 0.8, # top 30 percent get fokker-planck regularization
             fp_alpha: float = 5e-4,
+            mix_precision: bool = True,
             *args
     ) -> None:
         super().__init__()
@@ -65,10 +66,11 @@ class FPEnergyTrainer(nn.Module):
         self.fp_alpha = fp_alpha
         self.gate_loss = gate_loss or nn.BCEWithLogitsLoss()
         self.gate_optimizer = gate_optimizer or torch.optim.Adam(self.fp_gate.parameters(), lr=1e-4)
+        self.mix_precision = mix_precision
         self.global_step = 0
         self.base_lr = optimizer.param_groups[0]['lr']
         self.best_loss = float('inf')
-        self.use_amp = (self.device == torch.device("cuda"))
+        self.use_amp = self.mix_precision and (self.device == torch.device("cuda"))
         self.scaler = GradScaler('cuda') if self.use_amp else None
         self.scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
         self.gate_losses = []
@@ -175,15 +177,18 @@ class FPEnergyTrainer(nn.Module):
         xt.requires_grad_(True)
         logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
         pred_noise = self.score_fn(logp, xt)
-        fp_residual = self.fp_residual(
+        fp_residual_ = self.fp_residual(
             self.energy_net, x0, atom_features, edge_index, t, batch, self.forward_vp.vs
         )
+        fp_residual = (fp_residual_ - fp_residual_.mean(dim=0)) / (fp_residual_.std(dim=0) + 1e-6)
+        #print("residuals", fp_residual)
+
         with torch.no_grad():
             features = self.fp_gate.fp_gate_features(
                 xt.detach(), t, pred_noise.detach(), batch, num_molecules
             )
             norm_features = (features - features.mean(dim=0)) / (features.std(dim=0) + 1e-6)
-        gate_logits = self.fp_gate(features)
+        gate_logits = self.fp_gate(norm_features)
         with torch.no_grad():
             residual_per_mol = scatter_mean(fp_residual.abs(), batch, dim=0)
             #print('residual_per_mol')
@@ -232,7 +237,7 @@ class FPEnergyTrainer(nn.Module):
                 xt.detach(), t, pred_noise.detach(), batch, num_molecules
             )
             norm_features = (features - features.mean(dim=0)) / (features.std(dim=0) + 1e-6)
-            gate_prob = self.fp_gate(features)
+            gate_prob = self.fp_gate(norm_features)
         apply_fp_mask = (gate_prob > 0.5).squeeze(-1)
         if apply_fp_mask.any():
             active_mol_indices = torch.where(apply_fp_mask)[0]
@@ -241,19 +246,22 @@ class FPEnergyTrainer(nn.Module):
                 x0, atom_features, edge_index, batch, active_atom_mask, active_mol_indices
             )
             # for efficiency reasons we compute fokker-planck residual only once
-            fp_residual = self.fp_residual(
+            fp_residual_ = self.fp_residual(
                 self.energy_net, x0_active, atom_feat_active, edge_idx_active,
                 t_active, batch_active, self.forward_vp.vs
             )
+            fp_residual = (fp_residual_ - fp_residual_.mean(dim=0)) / (fp_residual_.std(dim=0) + 1e-6)
             fp_loss_ = self.fp_loss(fp_residual, self.fp_alpha)
             t_norm_active = t_active.float() / (self.forward_vp.vs.num_steps - 1)
             weight_ = self.lambda_t(t_norm_active.mean().item())
             fp_loss = weight_ * fp_loss_  # weightened loss
 
-            fp_residual_oracle = self.fp_residual(
+            fp_residual_oracle_ = self.fp_residual(
                 self.energy_net, x0_active, atom_feat_active, edge_idx_active,
                 t_active, batch_active, self.forward_vp.vs
             )
+            fp_residual_oracle = (fp_residual_oracle_ - fp_residual_oracle_.mean(dim=0)) / (fp_residual_oracle_.std(dim=0) + 1e-6)
+
             #residual_per_mol = scatter_mean(fp_residual_oracle.abs(), batch, dim=0)
             residual_per_mol = scatter_mean(
                 fp_residual_oracle.abs(), batch_active, dim=0, dim_size=len(active_mol_indices),

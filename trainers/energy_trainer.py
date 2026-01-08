@@ -13,7 +13,8 @@ class MolEnergyTrainer(nn.Module):
     def __init__(self, energy_net: nn.Module, forward_vp: nn.Module, data_loader, score_fn: Callable,
                  optimizer: torch.optim.Optimizer, loss_fn: Callable, epochs: int, device: str,
                  grad_acc: int, checkpoint: int, log_freq: int, store_path: str,
-                 warmup_steps: int = 0, rotation_augmentation: bool = False, lambda_t = lambda t: 1.0,*args) -> None:
+                 warmup_steps: int = 0, rotation_augmentation: bool = False,
+                 lambda_t = lambda t: 1.0, mix_precision: bool = True, *args) -> None:
         super().__init__()
         self.energy_net = energy_net.to(device)
         self.forward_vp = forward_vp.to(device)
@@ -30,10 +31,11 @@ class MolEnergyTrainer(nn.Module):
         self.warmup_steps = warmup_steps
         self.rotation_augmentation = rotation_augmentation
         self.lambda_t = lambda_t
+        self.mix_precision = mix_precision
         self.global_step = 0
         self.base_lr = optimizer.param_groups[0]['lr']
         self.best_loss = float('inf')
-        self.use_amp = (device == 'cuda')
+        self.use_amp = mix_precision and (device == 'cuda')
         self.scaler = torch.amp.GradScaler('cuda') if self.use_amp else None
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,

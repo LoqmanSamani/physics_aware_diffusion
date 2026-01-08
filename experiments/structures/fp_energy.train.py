@@ -19,7 +19,7 @@ dataset = SyntheticMolecularDataset(
 )
 dataloader = create_dataloader(
     dataset = dataset,
-    batch_size = 32,
+    batch_size = 64,
     shuffle=True
 )
 
@@ -51,13 +51,13 @@ print(sum(p.numel() for p in g_net.parameters()))
 
 e_optim = torch.optim.AdamW(
     e_net.parameters(),
-    lr=1e-3,
+    lr=1e-4,
     weight_decay=1e-4,
     betas=(0.9, 0.999)
 )
 g_optim = torch.optim.AdamW(
     g_net.parameters(),
-    lr=1e-3,
+    lr=1e-4,
     weight_decay=1e-4,
     betas=(0.9, 0.999)
 )
@@ -80,10 +80,11 @@ trainer = FPEnergyTrainer(
     log_freq = 10,
     store_path = "./checkpoints",
     warmup_steps = 300,
-    gate_epochs = 20,
+    gate_epochs = 10,
     rotation_augment = False,
     gate_optimizer = g_optim,
-    lambda_t = lambda t: 0.4
+    lambda_t = lambda t: 1.0,
+    mix_precision = False
 )
 
 losses = trainer()
