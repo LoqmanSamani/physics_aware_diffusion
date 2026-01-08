@@ -1,10 +1,11 @@
 import torch
 from experiments.structures.synthetic_molecular_dataset import SyntheticMolecularDataset, create_dataloader
-from trainers.molecule_score_net_trainer import MolScoreTrainer
-from score_nets.graph_score_net import GraphScoreNet
+from trainers.energy_trainer import MolEnergyTrainer
+from score_nets.graph_energy_net import GraphEnergyNet
 from diffusion.forward import ForwardVP
 from diffusion.schedules import LinearVS
-from losses.dsm_losses import min_snr_weighted_loss, score_matching_loss
+from losses.dsm_losses import min_snr_weighted_loss
+from physics.fokker_planck import score_from_energy
 from pathlib import Path
 from configs.load_config import load_config
 
@@ -37,25 +38,27 @@ vs = LinearVS(
 
 fwd = ForwardVP(vs)
 
-score_net = GraphScoreNet(
+energy_net = GraphEnergyNet(
     atom_dim=cfg['model']['atom_dim'],
     hidden_dim=cfg['model']['hidden_dim'],
     num_layers=cfg['model']['num_layers'],
-    dropout=cfg['model']['dropout']
+    dropout=cfg['model']['dropout'],
 )
-print(sum(p.numel() for p in score_net.parameters()))
+print(sum(p.numel() for p in energy_net.parameters()))
 
 optim = torch.optim.AdamW(
-    score_net.parameters(),
+    energy_net.parameters(),
     lr=cfg['training']['learning_rate'],
     weight_decay=cfg['training']['weight_decay'],
     betas=cfg['training']['betas']
 )
 
 
-trainer = MolScoreTrainer(
-    score_net=score_net,
+
+trainer = MolEnergyTrainer(
+    energy_net=energy_net,
     forward_vp=fwd,
+    score_fn = score_from_energy,
     data_loader=dataloader,
     optimizer=optim,
     loss_fn=min_snr_weighted_loss,
@@ -65,8 +68,8 @@ trainer = MolScoreTrainer(
     checkpoint=cfg['logging']['checkpoint_freq'],
     log_freq=cfg['logging']['log_freq'],
     store_path=cfg['logging']['output_dir'],
-    warmup_steps=cfg['training']['warmup_steps'],
-    rotation_augmentation=cfg['training']['rotation_augmentation']
+    warmup_steps=1000,
+    rotation_augmentation=False
 )
 
 losses = trainer()

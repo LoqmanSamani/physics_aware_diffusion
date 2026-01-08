@@ -36,7 +36,8 @@ class FPEnergyTrainer(nn.Module):
             gate_optimizer: Optional[torch.optim.Optimizer] = None,
             gate_loss: Optional[torch.nn.functional] = None,
             lambda_t = lambda t: 1.0,  # time-dependent weighting λ(t)
-            fp_quantile: float = 0.7, # top 30 percent get fokker-planck regularization
+            fp_quantile: float = 0.8, # top 30 percent get fokker-planck regularization
+            fp_alpha: float = 5e-4,
             *args
     ) -> None:
         super().__init__()
@@ -61,7 +62,8 @@ class FPEnergyTrainer(nn.Module):
         self.rotation_augment = rotation_augment
         self.lambda_t = lambda_t
         self.fp_quantile = fp_quantile
-        self.gate_loss = gate_loss or torch.nn.functional.binary_cross_entropy
+        self.fp_alpha = fp_alpha
+        self.gate_loss = gate_loss or nn.BCEWithLogitsLoss()
         self.gate_optimizer = gate_optimizer or torch.optim.Adam(self.fp_gate.parameters(), lr=1e-4)
         self.global_step = 0
         self.base_lr = optimizer.param_groups[0]['lr']
@@ -84,9 +86,8 @@ class FPEnergyTrainer(nn.Module):
             epoch_losses = self.gate_batch(pbar)
             mean_loss = sum(epoch_losses) / len(epoch_losses)
             self.gate_losses.append(mean_loss)
-            if (epoch + 1) % self.log_freq == 0:
-                lr = self.gate_optimizer.param_groups[0]['lr']
-                print(f"Epoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
+            lr = self.gate_optimizer.param_groups[0]['lr']
+            print(f"Epoch: {epoch + 1}/{self.gate_epochs} | LR: {lr:.2e} | Train Loss: {mean_loss:.4f}")
 
         self.fp_gate.eval()
         for epoch in range(self.epochs):
@@ -173,23 +174,31 @@ class FPEnergyTrainer(nn.Module):
         xt, true_score = self.forward_vp(x0, noise, t_per_atom)
         xt.requires_grad_(True)
         logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
-        pred_score = self.score_fn(logp, xt)
-        fp_residual1 = self.fp_residual(
-            self.energy_net, x0, atom_features, edge_index, t, batch, self.forward_vp.vs
-        )
-        fp_residual2 = self.fp_residual(
+        pred_noise = self.score_fn(logp, xt)
+        fp_residual = self.fp_residual(
             self.energy_net, x0, atom_features, edge_index, t, batch, self.forward_vp.vs
         )
         with torch.no_grad():
-            gate_features = self.fp_gate.fp_gate_features(
-                xt.detach(), t, pred_score.detach(), batch, num_molecules
+            features = self.fp_gate.fp_gate_features(
+                xt.detach(), t, pred_noise.detach(), batch, num_molecules
             )
-        gate_prob = self.fp_gate(gate_features)
+            norm_features = (features - features.mean(dim=0)) / (features.std(dim=0) + 1e-6)
+        gate_logits = self.fp_gate(features)
         with torch.no_grad():
-            residual_per_mol = scatter_mean((fp_residual1.abs() + fp_residual2.abs()) / 2, batch, dim=0)
+            residual_per_mol = scatter_mean(fp_residual.abs(), batch, dim=0)
+            #print('residual_per_mol')
+            #print('-------------------------------------------------------')
+            #print(residual_per_mol)
+            #print('-------------------------------------------------------')
             fp_threshold = torch.quantile(residual_per_mol, self.fp_quantile)
             oracle_label = (residual_per_mol > fp_threshold).float().unsqueeze(-1)
-        gate_loss = self.gate_loss(gate_prob, oracle_label)
+            #print('this is oracle labels')
+            #print('-------------------------------------------------------')
+            #print(oracle_label)
+            #print(oracle_label.unique(), oracle_label.float().mean())
+            #print('-------------------------------------------------------')
+
+        gate_loss = self.gate_loss(gate_logits, oracle_label)
         return gate_loss
 
 
@@ -212,17 +221,18 @@ class FPEnergyTrainer(nn.Module):
             std_per_atom = std_per_atom.unsqueeze(-1)
         xt.requires_grad_(True)
         logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch)
-        pred_score = self.score_fn(logp, xt)
-        dsm_loss_ = self.dsm_loss(pred_score, true_score, variance, batch)
+        pred_noise = self.score_fn(logp, xt)
+        dsm_loss_ = self.dsm_loss(pred_noise, noise, variance, batch)
         #print(dsm_loss_)
         weight = self.lambda_t(t_norm_per_atom.mean().item())
         dsm_loss = weight * dsm_loss_ # weightened loss
         fp_loss = torch.tensor(0.0, device=self.device)
         with torch.no_grad():
-            gate_features = self.fp_gate.fp_gate_features(
-                xt.detach(), t, pred_score.detach(), batch, num_molecules
+            features = self.fp_gate.fp_gate_features(
+                xt.detach(), t, pred_noise.detach(), batch, num_molecules
             )
-            gate_prob = self.fp_gate(gate_features)
+            norm_features = (features - features.mean(dim=0)) / (features.std(dim=0) + 1e-6)
+            gate_prob = self.fp_gate(features)
         apply_fp_mask = (gate_prob > 0.5).squeeze(-1)
         if apply_fp_mask.any():
             active_mol_indices = torch.where(apply_fp_mask)[0]
@@ -230,15 +240,12 @@ class FPEnergyTrainer(nn.Module):
             x0_active, atom_feat_active, edge_idx_active, batch_active, t_active = self.subset_graph_data(
                 x0, atom_features, edge_index, batch, active_atom_mask, active_mol_indices
             )
-            fp_residual1 = self.fp_residual(
+            # for efficiency reasons we compute fokker-planck residual only once
+            fp_residual = self.fp_residual(
                 self.energy_net, x0_active, atom_feat_active, edge_idx_active,
                 t_active, batch_active, self.forward_vp.vs
             )
-            fp_residual2 = self.fp_residual(
-                self.energy_net, x0_active, atom_feat_active, edge_idx_active,
-                t_active, batch_active, self.forward_vp.vs
-            )
-            fp_loss_ = self.fp_loss(fp_residual1, fp_residual2, x0_active.numel())
+            fp_loss_ = self.fp_loss(fp_residual, self.fp_alpha)
             t_norm_active = t_active.float() / (self.forward_vp.vs.num_steps - 1)
             weight_ = self.lambda_t(t_norm_active.mean().item())
             fp_loss = weight_ * fp_loss_  # weightened loss
@@ -252,9 +259,14 @@ class FPEnergyTrainer(nn.Module):
                 fp_residual_oracle.abs(), batch_active, dim=0, dim_size=len(active_mol_indices),
             )
             fp_threshold = torch.quantile(residual_per_mol, self.fp_quantile)
+            #print(fp_threshold)
             oracle_label = (residual_per_mol > fp_threshold).float()
+            #print(oracle_label.shape)
             gate_pred = (gate_prob.squeeze(-1) > 0.5).float()
-            accuracy = (gate_pred == oracle_label).float().mean()
+            gate_pred_active = gate_pred[active_mol_indices]
+            #print(gate_pred.shape)
+
+            accuracy = (gate_pred_active == oracle_label).float().mean()
             self.gate_accuracy.append(accuracy.item())
             fp_rate = apply_fp_mask.float().mean().item()
             self.fp_application_rate.append(fp_rate)
@@ -281,8 +293,8 @@ class FPEnergyTrainer(nn.Module):
             variance = self.forward_vp.vs.get_variance(t_per_atom)
             xt.requires_grad_(True)
             logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch_idx)
-            pred_score = self.score_fn(logp, xt)
-            loss_ = self.dsm_loss(pred_score, true_score, variance, batch_idx)
+            pred_noise = self.score_fn(logp, xt)
+            loss_ = self.dsm_loss(pred_noise, noise, variance, batch_idx)
             weight = self.lambda_t(t_norm_per_atom.mean().item())
             loss = weight * loss_
             val_losses.append(loss.item())

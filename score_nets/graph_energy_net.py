@@ -64,7 +64,6 @@ class EnergyHead(nn.Module):
 
         if not reduce or batch is None:
             return node_energy
-
         return scatter_add(node_energy, batch, dim=0)
 
 
@@ -167,7 +166,7 @@ class GraphTransformer(nn.Module):
         attn = scatter_softmax(attn_logits, i, dim=0)
         attn = self.dropout(attn)
         message = attn.unsqueeze(-1) * (value_j + edge_ij)
-        agg = torch.zeros_like(nodes)
+        agg = torch.zeros_like(nodes, dtype=message.dtype)
         agg = scatter_add(message, i, dim=0, out=agg)
         nodes = self.norm1(nodes + self.output(agg))
         nodes = self.norm2(nodes + self.feedforward(nodes))
@@ -175,19 +174,19 @@ class GraphTransformer(nn.Module):
 
 
 class NodeInitializer(nn.Module):
-    """initialize node embeddings: n_i^(0) = [a_i, t]"""
-
+    """initialize node embeddings with atom features and time"""
     def __init__(self, atom_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.atom_project = nn.Linear(atom_dim, hidden_dim)
-        self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
+        #self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
+        self.time_embed = TimeEmbedding(hidden_dim)
 
-    def forward(self, atom_features: torch.Tensor, time_: torch.Tensor, num_nodes: int,
-                batch: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, atom_features: torch.Tensor, time_: torch.Tensor,
+                num_nodes: int, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         arguments:
             atom_features: (N, atom_dim)
-            time_: (batch_size,) or scalar diffusion timestep
+            time_: (batch_size,) normalized timesteps [0, 1]
             num_nodes: int, number of nodes
             batch: (N,) batch assignment (optional)
         returns:
@@ -198,7 +197,10 @@ class NodeInitializer(nn.Module):
         if batch is not None:
             h_time = time_emb[batch]
         else:
-            h_time = time_emb.expand(num_nodes, -1)
+            if time_emb.shape[0] == num_nodes:
+                h_time = time_emb
+            else:
+                h_time = time_emb.expand(num_nodes, -1)
         return h_atom + h_time
 
 

@@ -1,4 +1,5 @@
 import torch
 
-def energy_fokker_planck_loss(residual1: torch.Tensor, residual2: torch.Tensor, dim: float, alpha: float = 5e-4) -> torch.Tensor:
-    return (alpha * ((residual1 * residual2) / (dim**2))).mean()
+def fokker_planck_loss(fp_residual: torch.Tensor, alpha: float = 5e-4) -> torch.Tensor:
+    return alpha * (fp_residual ** 2).mean()
+

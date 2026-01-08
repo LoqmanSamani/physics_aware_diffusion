@@ -39,18 +39,31 @@ def weak_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: torc
     fp_residual = (0.5 * beta_t * (div_score + score_sq) - drift_term - div_drift - dlogp_dt)
     return fp_residual
 
-def score_from_energy(logp: torch.Tensor, data: torch.Tensor) -> torch.Tensor:
+
+def score_from_energy(logp: torch.Tensor, data: torch.Tensor, clip_norm: float = 10.0) -> torch.Tensor:
     """
-    score function: computes score from energy: s_θ(x,t) = ∇_x log p_θ(x,t)
-    arguments:
-        logp: scalar or (batch_size,) tensor of log probabilities (output of energy net)
-        data: (N, 3) coordinates that require gradients
-    returns:
-        (N, 3) score vectors ∇_x log p_θ(x,t)
+    Extract score from energy with gradient clipping for stability.
+    For FP residual, we need gradients but must prevent explosion.
     """
     if logp.dim() == 0:
         logp_sum = logp
     else:
         logp_sum = logp.sum()
-    score = torch.autograd.grad(outputs=logp_sum, inputs=data, create_graph=True, retain_graph=True)[0]
+
+    score = torch.autograd.grad(
+        outputs=logp_sum,
+        inputs=data,
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True
+    )[0]
+
+    # Clip per-sample to prevent explosion while preserving relative magnitudes
+    if clip_norm is not None:
+        # Compute norm per atom
+        score_norm = torch.norm(score, dim=-1, keepdim=True)
+        # Clip only if exceeds threshold
+        scale = torch.clamp(clip_norm / (score_norm + 1e-8), max=1.0)
+        score = score * scale
+
     return score

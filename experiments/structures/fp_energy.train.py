@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from losses.fp_loss import energy_fokker_planck_loss
+from losses.fp_loss import fokker_planck_loss
 from losses.dsm_losses import min_snr_weighted_loss
 from score_nets.graph_energy_net import GraphEnergyNet
 from trainers.fp_diffusion_trainer import FPEnergyTrainer
@@ -11,7 +11,7 @@ from diffusion.schedules import LinearVS
 from synthetic_molecular_dataset import SyntheticMolecularDataset, create_dataloader
 
 dataset = SyntheticMolecularDataset(
-    n_molecules = 1000,
+    n_molecules = 10000,
     n_atom_types = 1,
     min_atoms = 10,
     max_atoms = 20,
@@ -38,15 +38,16 @@ vs = LinearVS(
 )
 
 fwd = ForwardVP(vs)
-g_net = FPGate(hidden_dim=128)
+g_net = FPGate(hidden_dim=256)
 
 e_net = GraphEnergyNet(
     atom_dim=1,
-    hidden_dim=128,
-    num_layers=3,
+    hidden_dim=256,
+    num_layers=4,
     dropout=0.2
 )
-#print(sum(p.numel() for p in score_net.parameters()))
+print(sum(p.numel() for p in e_net.parameters()))
+print(sum(p.numel() for p in g_net.parameters()))
 
 e_optim = torch.optim.AdamW(
     e_net.parameters(),
@@ -56,7 +57,7 @@ e_optim = torch.optim.AdamW(
 )
 g_optim = torch.optim.AdamW(
     g_net.parameters(),
-    lr=1e-4,
+    lr=1e-3,
     weight_decay=1e-4,
     betas=(0.9, 0.999)
 )
@@ -69,20 +70,20 @@ trainer = FPEnergyTrainer(
     data_loader = dataloader,
     val_loader = val_loader,
     optimizer = e_optim,
-    fp_loss = energy_fokker_planck_loss,
+    fp_loss = fokker_planck_loss,
     dsm_loss = min_snr_weighted_loss,
     score_fn = score_from_energy,
     fp_residual = weak_fp_residual,
-    epochs = 30,
-    grad_acc = 2,
+    epochs = 60,
+    grad_acc = 1,
     checkpoint = 10,
-    log_freq = 2,
+    log_freq = 10,
     store_path = "./checkpoints",
     warmup_steps = 300,
-    gate_epochs = 10,
+    gate_epochs = 20,
     rotation_augment = False,
     gate_optimizer = g_optim,
-    lambda_t = lambda t: 0.1
+    lambda_t = lambda t: 0.4
 )
 
 losses = trainer()
