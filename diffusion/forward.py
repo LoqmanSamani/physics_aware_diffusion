@@ -7,9 +7,10 @@ from typing import Tuple
 
 class ForwardVP(nn.Module):
     """continuous-time vp-sde forward process"""
-    def __init__(self, variance_scheduler: LinearVS):
+    def __init__(self, variance_scheduler: LinearVS, eps: float = 1e-8):
         super().__init__()
         self.vs = variance_scheduler
+        self.eps = eps
 
     def forward(self, x0: torch.Tensor, noise: torch.Tensor, t: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """forward diffusion: x_t = √(1 - σ²(t)) · x₀ + σ(t) · ε
@@ -30,5 +31,5 @@ class ForwardVP(nn.Module):
             signal_coeff = signal_coeff.unsqueeze(-1)
             variance = variance.unsqueeze(-1)
         xt = signal_coeff * x0 + std * noise
-        true_score = -noise / std
+        true_score = -noise / (std + self.eps)
         return xt, true_score
