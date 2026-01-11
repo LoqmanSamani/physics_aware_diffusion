@@ -5,7 +5,7 @@ from score_nets.graph_energy_net import GraphEnergyNet
 from diffusion.forward import ForwardVP
 from diffusion.schedules import LinearVS
 from losses.dsm_losses import min_snr_weighted_loss
-from physics.fokker_planck import score_from_energy
+from physics.derive_score import score_from_energy
 from pathlib import Path
 from configs.load_config import load_config
 
@@ -29,11 +29,8 @@ dataloader = create_dataloader(
 )
 
 vs = LinearVS(
-    num_steps=cfg['diffusion']['num_steps'],
     beta_start=cfg['diffusion']['beta_start'],
-    beta_end=cfg['diffusion']['beta_end'],
-    start=cfg['diffusion']['time_start'],
-    end=cfg['diffusion']['time_end']
+    beta_end=cfg['diffusion']['beta_end']
 )
 
 fwd = ForwardVP(vs)

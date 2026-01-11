@@ -1,6 +1,6 @@
 import torch
 from experiments.structures.synthetic_molecular_dataset import SyntheticMolecularDataset, create_dataloader
-from trainers.molecule_score_net_trainer import MolScoreTrainer
+from trainers.mol_score_trainer import MolScoreTrainer
 from score_nets.graph_score_net import GraphScoreNet
 from diffusion.forward import ForwardVP
 from diffusion.schedules import LinearVS

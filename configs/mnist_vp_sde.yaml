@@ -5,7 +5,7 @@
 
 experiment:
   name: mnist_vp_sde_tinyunet
-  seed: 42
+  seed: 32
   device: cuda
 
 dataset:
@@ -18,11 +18,9 @@ dataset:
 
 diffusion:
   type: vp_sde
-  num_steps: 400
   beta_start: 0.1
   beta_end: 20.0
-  time_start: 0.0
-  time_end: 1.0
+  min_variance: 0.01
 
 model:
   name: tiny_unet
@@ -32,8 +30,8 @@ model:
 training:
   batch_size: 64
   epochs: 50
-  learning_rate: 0.0002
-  weight_decay: 0.0
+  learning_rate: 0.0001
+  weight_decay: 0.0001
   grad_accumulation: 1
   precision: fp32  # try 'bf16' for speed
   optimizer: adamw

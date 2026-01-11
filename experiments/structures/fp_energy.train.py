@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
 from losses.fp_loss import fokker_planck_loss
-from losses.dsm_losses import min_snr_weighted_loss
+from losses.dsm_losses import mse_loss
 from score_nets.graph_energy_net import GraphEnergyNet
-from trainers.fp_diffusion_trainer import FPEnergyTrainer
-from physics.fokker_planck import weak_fp_residual, score_from_energy
-from physics.fokker_planck_gate import FPGate
+from trainers.gate_energy_trainer1 import FPEnergyTrainer
+from physics.fp_residuals import heavy_fp_residual
+from physics.derive_score import score_from_energy
+from physics.fp_gate import FPGate
 from diffusion.forward import ForwardVP
 from diffusion.schedules import LinearVS
 from synthetic_molecular_dataset import SyntheticMolecularDataset, create_dataloader
@@ -29,22 +30,14 @@ val_loader = create_dataloader(
     shuffle=True
 )
 
-vs = LinearVS(
-    num_steps=1000,
-    beta_start=0.1,
-    beta_end=20.0,
-    start=0.0,
-    end=1.0
-)
-
+vs = LinearVS(beta_start=0.1, beta_end=20.0, min_variance=1e-5)
 fwd = ForwardVP(vs)
 g_net = FPGate(hidden_dim=256)
-
 e_net = GraphEnergyNet(
     atom_dim=1,
     hidden_dim=256,
     num_layers=4,
-    dropout=0.2
+    dropout=0.1
 )
 print(sum(p.numel() for p in e_net.parameters()))
 print(sum(p.numel() for p in g_net.parameters()))
@@ -71,20 +64,21 @@ trainer = FPEnergyTrainer(
     val_loader = val_loader,
     optimizer = e_optim,
     fp_loss = fokker_planck_loss,
-    dsm_loss = min_snr_weighted_loss,
+    dsm_loss = mse_loss,
     score_fn = score_from_energy,
-    fp_residual = weak_fp_residual,
-    epochs = 60,
-    grad_acc = 1,
+    fp_residual = heavy_fp_residual,
+    epochs = 50,
+    grad_acc = 2,
     checkpoint = 10,
-    log_freq = 10,
-    store_path = "./checkpoints",
-    warmup_steps = 300,
+    log_freq = 5,
+    store_path = "./checkpoints2",
+    warmup_steps = 500,
     gate_epochs = 10,
     rotation_augment = False,
     gate_optimizer = g_optim,
-    lambda_t = lambda t: 1.0,
-    mix_precision = False
+    mix_precision = False,
+    compute_oracle = True,
+    lambda_t = lambda t: 1.0
 )
 
 losses = trainer()

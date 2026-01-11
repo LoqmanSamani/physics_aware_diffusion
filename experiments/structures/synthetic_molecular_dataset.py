@@ -100,9 +100,10 @@ class SyntheticMolecularDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         mol = self.molecules[idx]
         return Data(
-            x=mol['atom_features'].clone(),
-            pos=mol['pos'].clone(),
-            edge_index=mol['edge_index'].clone()
+            atom_features=mol['atom_features'].clone(),
+            coords=mol['pos'].clone(),
+            edge_index=mol['edge_index'].clone(),
+            num_nodes=mol['num_atoms']  # <-- fix the warning
         )
 
     def get_molecule_info(self, idx):

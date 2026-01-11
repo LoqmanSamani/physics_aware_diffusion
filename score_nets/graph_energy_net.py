@@ -10,42 +10,49 @@ class GraphEnergyNet(nn.Module):
     energy-based graph transformer for conservative score parameterization.
     the score is computed as: s_θ(x,t) = ∇_x log p_θ(x,t) = ∇_x E_θ(x,t)
     where E_θ is the energy function (log probability).
+    the computed logp (output of this network)
+    is then used to compute score through torch.autograd.grad()
     """
     def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, dropout: float = 0.1, *args) -> None:
         super().__init__()
-        self.position_encoder = PositionalEncoding(hidden_dim)
+        self.pos_encoder = PositionalEncoding(hidden_dim)
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
             GraphTransformer(hidden_dim, dropout) for _ in range(num_layers)
         ])
         self.energy_head = EnergyHead(hidden_dim)
 
-    def forward(self, data: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
-                time_: torch.Tensor, batch: Optional[torch.Tensor] = None, reduce: bool = True) -> torch.Tensor:
+    def forward(self, coords: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
+                t: torch.Tensor, batch_idx: Optional[torch.Tensor] = None, reduce: bool = True) -> torch.Tensor:
         """
         arguments:
-            data: (N, 3) molecular coordinates
-            atom_features: (N, atom_dim) atom type features
+            coords: (number of atoms, 3) atom coordinates
+            atom_features: (number of atoms, atom_dim) atom type features
             edge_index: (2, E) edge connectivity
-            time_: (batch_size,) or scalar diffusion timestep
-            batch: (N,) batch assignment for each node (optional)
+            t: (number of atoms, ) continuous diffusion time
+            batch_idx: (number of atoms, ) specifies each atom's origin
+                   (atoms belong to the same molecule has the same index)
+                   it is created automatically if PyG dataloader is used.
+            reduce: specifies whether computed energy per atom is
+                    summed per molecule (by default this is done!)
         returns:
-            scalar log p_theta(x,t) - the energy function
+            scalar log p_theta(x,t) - outputs a scalar per molecule in batch
+                                      (if reduce is True in energy head)
         """
-        num_nodes = data.size(0)
-        pos_features = self.position_encoder(data)
-        nodes = self.initializer(atom_features, time_, num_nodes, batch)
-        nodes = nodes + pos_features
+        num_nodes = coords.size(0)
+        coords_features = self.pos_encoder(coords)
+        nodes = self.initializer(atom_features, t, num_nodes)
+        nodes = nodes + coords_features
         if edge_index.numel() > 0:
-            edges = compute_edge_features(data, edge_index)
+            edges = compute_edge_features(coords, edge_index)
             for layer in self.layers:
                 nodes = layer(nodes, edges, edge_index)
-        logp = self.energy_head(nodes, batch, reduce)
+        logp = self.energy_head(nodes, batch_idx=None, reduce = False)
         return logp
 
 class EnergyHead(nn.Module):
     """
-    maps node embeddings to scalar energies and sums them.
+    maps node embeddings to scalar energies and sums them
     ψ : R^K → R, then score = ∇_x Σ_i ψ(n^(L)_i)
     """
     def __init__(self, hidden_dim: int) -> None:
@@ -58,13 +65,13 @@ class EnergyHead(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, node_features: torch.Tensor, batch: Optional[torch.Tensor] = None, reduce: bool = True) -> torch.Tensor:
+    def forward(self, node_features: torch.Tensor, batch_idx: Optional[torch.Tensor] = None, reduce: bool = False) -> torch.Tensor:
         """maps each node to a scalar energy and optionally sums over the molecule(s)."""
         node_energy = self.mlp(node_features).squeeze(-1)  # (num_atoms,)
 
-        if not reduce or batch is None:
+        if not reduce or batch_idx is None:
             return node_energy
-        return scatter_add(node_energy, batch, dim=0)
+        return scatter_add(node_energy, batch_idx, dim=0)
 
 
 class PositionalEncoding(nn.Module):
@@ -79,8 +86,8 @@ class PositionalEncoding(nn.Module):
             nn.Linear(hidden_dim, hidden_dim)
         )
 
-    def forward(self, data: torch.Tensor) -> torch.Tensor:
-        return self.mlp(data)
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        return self.mlp(coords)
 
 
 class TimeEmbedding(nn.Module):
@@ -95,16 +102,16 @@ class TimeEmbedding(nn.Module):
             nn.Linear(embed_dim, embed_dim)
         )
 
-    def forward(self, time_: torch.Tensor) -> torch.Tensor:
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
         """
-        time_: (B,) or (B, 1) or scalar
-        returns: (B, embed_dim)
+        t: (number of atoms, ) or scalar
+        returns: (number of atoms, embed_dim)
         """
-        if time_.dim() == 0:
-            time_ = time_.unsqueeze(0)
-        if time_.dim() == 2:
-            time_ = time_.squeeze(-1)
-        return self.mlp(time_.unsqueeze(-1))
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
+        if t.dim() == 2:
+            t = t.squeeze(-1)
+        return self.mlp(t.unsqueeze(-1))
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -126,7 +133,7 @@ class SinusoidalTimeEmbedding(nn.Module):
 
 class GraphTransformer(nn.Module):
     """
-    attention-based message passing layer.
+    attention-based message passing layer
     n^(l+1) = φ^(l)(n^(l), e) where e_ij = x_i - x_j
     """
     def __init__(self, hidden_dim: int, dropout: float = 0.1) -> None:
@@ -151,11 +158,11 @@ class GraphTransformer(nn.Module):
     def forward(self, nodes: torch.Tensor, edges: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         """
         arguments:
-            nodes: (N, hidden_dim)
+            nodes: (number of atoms, hidden_dim)
             edges: (E, 4) [dx, dy, dz, distance]
             edge_index: (2, E) [source, target]
         returns:
-            (N, hidden_dim) updated node features
+            (number of atoms, hidden_dim) updated node features
         """
         i, j = edge_index
         query_i = self.query(nodes[i])
@@ -181,19 +188,19 @@ class NodeInitializer(nn.Module):
         #self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
         self.time_embed = TimeEmbedding(hidden_dim)
 
-    def forward(self, atom_features: torch.Tensor, time_: torch.Tensor,
+    def forward(self, atom_features: torch.Tensor, t: torch.Tensor,
                 num_nodes: int, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         arguments:
-            atom_features: (N, atom_dim)
-            time_: (batch_size,) normalized timesteps [0, 1]
+            atom_features: (number of atoms, atom_dim)
+            t: (number fo atoms, ) continuous time in range (0, 1)
             num_nodes: int, number of nodes
-            batch: (N,) batch assignment (optional)
+            batch: (number of atoms, ) batch assignment (optional)
         returns:
-            (N, hidden_dim) initialized node features
+            (number of atoms, hidden_dim) initialized node features
         """
         h_atom = self.atom_project(atom_features)
-        time_emb = self.time_embed(time_)
+        time_emb = self.time_embed(t)
         if batch is not None:
             h_time = time_emb[batch]
         else:
@@ -204,17 +211,17 @@ class NodeInitializer(nn.Module):
         return h_atom + h_time
 
 
-def compute_edge_features(data: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+def compute_edge_features(coords: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
     """
     compute translation-invariant edge features: e_ij = x_i - x_j
     arguments:
-        data: (N, 3) atomic coordinates
+        coords: (number of atoms, 3) atomic coordinates
         edge_index: (2, E) edge connectivity
     returns:
         (E, 4) [relative_x, relative_y, relative_z, distance]
     """
     i, j = edge_index
-    relative_pos = data[i] - data[j]
+    relative_pos = coords[i] - coords[j]
     distance = torch.norm(relative_pos, dim=-1, keepdim=True)
     edge_features = torch.cat([relative_pos, distance], dim=-1)
     return edge_features

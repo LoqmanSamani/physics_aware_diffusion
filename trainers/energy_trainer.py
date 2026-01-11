@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 import os
@@ -9,7 +8,7 @@ from typing import Callable
 
 
 class MolEnergyTrainer(nn.Module):
-    """energy trainer for VP-SDE on a molecular dataset"""
+    """energy trainer for vp-sde on a molecular dataset"""
     def __init__(self, energy_net: nn.Module, forward_vp: nn.Module, data_loader, score_fn: Callable,
                  optimizer: torch.optim.Optimizer, loss_fn: Callable, epochs: int, device: str,
                  grad_acc: int, checkpoint: int, log_freq: int, store_path: str,
@@ -50,11 +49,11 @@ class MolEnergyTrainer(nn.Module):
             epoch_losses = []
             pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             for step, batch in enumerate(pbar):
-                x = batch.pos.to(self.device)
+                x0 = batch.pos.to(self.device)
                 atom_features = batch.x.to(self.device)
                 edge_index = batch.edge_index.to(self.device)
                 batch_idx = batch.batch.to(self.device)
-                noise = torch.randn_like(x)
+                noise = torch.randn_like(x0)
                 num_molecules = batch.num_graphs
                 if self.rotation_augmentation:
                     num_molecules = batch.num_graphs
@@ -62,7 +61,7 @@ class MolEnergyTrainer(nn.Module):
                     # rotate positions and noise consistently per molecule
                     for mol_idx in range(num_molecules):
                         mask = batch_idx == mol_idx
-                        x[mask] = x[mask] @ R[mol_idx].T
+                        x0[mask] = x0[mask] @ R[mol_idx].T
                         noise[mask] = noise[mask] @ R[mol_idx].T
 
                 time_ = torch.randint(1, self.forward_vp.vs.num_steps, (num_molecules,), device=self.device)
@@ -70,27 +69,27 @@ class MolEnergyTrainer(nn.Module):
                 t_norm_per_atom = time_per_atom.float() / (self.forward_vp.vs.num_steps - 1)
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
-                        noisy_x, true_score = self.forward_vp(x, noise, time_per_atom)
+                        xt, true_score = self.forward_vp(x0, noise, time_per_atom)
                         std_per_atom = self.forward_vp.vs.get_std(time_per_atom)
                         variance = self.forward_vp.vs.get_variance(time_per_atom)
                         while std_per_atom.dim() < noise.dim():
                             std_per_atom = std_per_atom.unsqueeze(-1)
-                        noisy_x.requires_grad_(True)
-                        logp = self.energy_net(noisy_x, atom_features, edge_index, t_norm_per_atom, batch_idx)
-                        pred_noise = self.score_fn(logp, noisy_x)
-                        loss_ = self.loss_fn(pred_noise=pred_noise, target_noise=noise, variance=variance, batch_idx=batch_idx) / self.grad_acc
+                        xt.requires_grad_(True)
+                        logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch_idx)
+                        pred_score = self.score_fn(logp, xt)
+                        loss_ = self.loss_fn(pred_score, true_score, variance, batch_idx) / self.grad_acc
                         weight = self.lambda_t(t_norm_per_atom.mean().item())
                         loss = weight * loss_
                     self.scaler.scale(loss).backward()
                 else:
-                    noisy_x, true_score = self.forward_vp(x, noise, time_per_atom)
+                    xt, true_score = self.forward_vp(x0, noise, time_per_atom)
                     std_per_atom = self.forward_vp.vs.get_std(time_per_atom)
                     while std_per_atom.dim() < noise.dim():
                         std_per_atom = std_per_atom.unsqueeze(-1)
-                    noisy_x.requires_grad_(True)
-                    logp = self.energy_net(noisy_x, atom_features, edge_index, t_norm_per_atom, batch_idx)
-                    pred_noise = self.score_fn(logp, noisy_x)
-                    loss_ = self.loss_fn(pred_noise, noise, variance, batch_idx) / self.grad_acc
+                    xt.requires_grad_(True)
+                    logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch_idx)
+                    pred_score = self.score_fn(logp, xt)
+                    loss_ = self.loss_fn(pred_score, true_score, variance, batch_idx) / self.grad_acc
                     weight = self.lambda_t(t_norm_per_atom.mean().item())
                     loss = weight * loss_
                     loss.backward()

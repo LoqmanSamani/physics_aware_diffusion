@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 import os
@@ -9,7 +8,7 @@ from typing import Callable
 
 
 class MolScoreTrainer(nn.Module):
-    """trainer for VP-SDE on a molecular dataset"""
+    """trainer for vp-sde on a molecular dataset"""
     def __init__(self, score_net: nn.Module, forward_vp: nn.Module, data_loader,
                  optimizer: torch.optim.Optimizer, loss_fn: Callable, epochs: int, device: str,
                  grad_acc: int, checkpoint: int, log_freq: int, store_path: str,
@@ -95,13 +94,13 @@ class MolScoreTrainer(nn.Module):
                         data=noisy_x, atom_features=atom_features, edge_index=edge_index,
                         time_=t_norm_per_atom, batch=batch_idx
                     )
-                    print("true score")
-                    print("*********************************")
-                    print(true_score)
-                    print("score")
-                    print("*********************************")
-                    print(score)
-                    break
+                    #print("true score")
+                    #print("*********************************")
+                    #print(true_score)
+                    #print("score")
+                    #print("*********************************")
+                    #print(score)
+                    #break
                     loss = self.loss_fn(score, noise, variance, batch_idx) / self.grad_acc
                     loss.backward()
 

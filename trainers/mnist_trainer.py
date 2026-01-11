@@ -7,7 +7,7 @@ from typing import Callable
 
 
 class MNISTTrainer(nn.Module):
-    """trainer for the variance preserving diffusion model"""
+    """trainer for the variance preserving diffusion model trained on mnist dataset"""
     def __init__(self, score_net: torch.nn.Module, forward_vp: torch.nn.Module,
                  data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer,
                  loss_fn: Callable, epochs: int, grad_acc: int, checkpoint: int,
@@ -49,23 +49,24 @@ class MNISTTrainer(nn.Module):
         for epoch in range(self.epochs):
             train_losses_epoch = []
             pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
-            for step, (x, _) in enumerate(pbar):
-                x = x.to(self.device)
-                noise = torch.randn_like(x)
-                time_ = torch.randint(0, self.forward_vp.vs.num_steps, (x.shape[0],), device=self.device)
-                t_norm = time_.float() / (self.forward_vp.vs.num_steps - 1)
+            for step, (x0, _) in enumerate(pbar):
+                x0 = x0.to(self.device)
+                noise = torch.randn_like(x0)
+                time = self.sample_time(x0.shape[0])
+                variance = self.forward_vp.vs.get_variance(time)
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
-                        noisy_x = self.forward_vp(x, noise, time_)
+                        xt, true_score = self.forward_vp(x0, noise, time)
                     with torch.amp.autocast('cuda', enabled=False):
-                        score = self.score_net(noisy_x, t_norm)
+                        pred_score = self.score_net(xt, time)
                     with torch.amp.autocast('cuda'):
-                        loss = self.loss_fn(score, noise, time_, self.forward_vp.vs) / self.grad_acc
+                        loss = self.loss_fn(pred_score, true_score, variance) / self.grad_acc
                     self.scaler.scale(loss).backward()
                 else:
-                    noisy_x = self.forward_vp(x, noise, time_)
-                    score = self.score_net(noisy_x, t_norm)
-                    loss = self.loss_fn(score, noise, time_, self.forward_vp.vs) / self.grad_acc
+                    xt, pred_score = self.forward_vp(x0, noise, time)
+                    pred_score = self.score_net(xt, time)
+                    loss = self.loss_fn(pred_score, true_score, variance) / self.grad_acc
+                    #print(loss.shape)
                     loss.backward()
                 if (step + 1) % self.grad_acc == 0:
                     if self.use_amp:
@@ -102,15 +103,22 @@ class MNISTTrainer(nn.Module):
 
             if self.global_step >= self.warmup_steps:
                 self.scheduler.step()
-            # if (epoch + 1) % self.log_freq == 0:
-            # lr = self.optimizer.param_groups[0]['lr']
-            # print(f"\nEpoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_train_loss:.4f}")
+            if (epoch + 1) % self.log_freq == 0:
+                lr = self.optimizer.param_groups[0]['lr']
+                print(f"\nEpoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | Train Loss: {mean_train_loss:.4f}")
             if (epoch + 1) % self.checkpoint == 0:
                 self._save_checkpoint(epoch + 1, mean_train_loss, train_losses)
             if mean_train_loss < self.best_loss:
                 self.best_loss = mean_train_loss
                 self._save_checkpoint(epoch + 1, mean_train_loss, train_losses, is_best=True)
         return train_losses
+
+    def sample_time(self, batch_size: int, eps: float = 1e-3) -> torch.Tensor:
+        """oversample middle timesteps where score is hardest"""
+        # beta distribution concentrates sampling around t=0.5
+        t = torch.distributions.Beta(2.0, 2.0).sample((batch_size,)).to(self.device)
+        t = eps + (1.0 - 2 * eps) * t
+        return t
 
     def _save_checkpoint(self, epoch: int, loss: float, train_losses: list, is_best: bool = False) -> None:
         checkpoint = {
@@ -120,7 +128,8 @@ class MNISTTrainer(nn.Module):
             'loss': loss,
             'train_losses': train_losses,
             'scheduler': self.forward_vp.vs.state_dict(),
-            'epochs': self.epochs
+            'epochs': self.epochs,
+            'global_step': self.global_step
         }
         filename = "vp_best.pth" if is_best else f"vp_epoch_{epoch}.pth"
         filepath = os.path.join(self.store_path, filename)
