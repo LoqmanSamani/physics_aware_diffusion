@@ -1,19 +1,25 @@
 import torch
 import torch.nn as nn
+from physics.derive_score import score_from_energy
 
 
 def heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: torch.Tensor,
-                     edge_index: torch.Tensor, t: torch.Tensor, batch_idx: torch.Tensor,
-                     scheduler: nn.Module, sigma: float = 1e-4, h_s: float = 1e-3, h_d: float = 5e-4) -> torch.Tensor:
+                      edge_index: torch.Tensor, t: torch.Tensor, batch_idx: torch.Tensor,
+                      scheduler: nn.Module, seed: int | None = None, sigma: float = 1e-4,
+                      h_s: float = 1e-3, h_d: float = 5e-4) -> torch.Tensor:
     """per-atom weak Fokker–Planck residual estimator using finite-difference
     approximations for spatial and temporal derivatives"""
-    #per-atom weak fokker–planck residual estimator
+    if seed is not None:
+        gen = torch.Generator(device=x.device)
+        gen.manual_seed(seed)
+    else:
+        gen = None
     _, dim = x.shape
     # β_t = g^2(t)
     beta_t = scheduler.get_variance(t)
     beta_t_exp = beta_t.unsqueeze(-1)
     # sample v ~ N(0, σ^2 I)
-    v = sigma * torch.randn_like(x)
+    v = sigma * torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=gen)
     # x ± v
     x_plus = (x + v).requires_grad_(True)
     x_minus = (x - v).requires_grad_(True)
@@ -53,11 +59,16 @@ def heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
 
 
 def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: torch.Tensor,
-                     edge_index: torch.Tensor, t: torch.Tensor, batch_idx: torch.Tensor,
-                     scheduler: nn.Module, h_s: float = 1e-3, h_d: float = 5e-4, ) -> torch.Tensor:
+                      edge_index: torch.Tensor, t: torch.Tensor, batch_idx: torch.Tensor,
+                      scheduler: nn.Module, seed: int | None = None, h_s: float = 1e-3,
+                      h_d: float = 5e-4, ) -> torch.Tensor:
     """lightweight weak fokker–planck residual estimator using Hutchinson’s
     trace estimator for the score divergence"""
-    #weak fokker-planck residual estimator
+    if seed is not None:
+        gen = torch.Generator(device=x.device)
+        gen.manual_seed(seed)
+    else:
+        gen = None
     _, dim = x.shape
     beta_t = scheduler.get_variance(t)
     beta_t_exp = beta_t.unsqueeze(-1)
@@ -67,7 +78,8 @@ def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
         logp.sum(), x, create_graph=True, retain_graph=True
     )[0]
     # hutchinson divergence estimator: div s(x)
-    eps = torch.randn_like(x)
+    eps = torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=gen)
+    #eps = torch.randn_like(x)
     # rademacher noise
     #eps = torch.randint(0, 2, x.shape, device=x.device) * 2 - 1
 

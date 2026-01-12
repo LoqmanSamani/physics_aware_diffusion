@@ -36,7 +36,6 @@ class TeacherTrainer(nn.Module):
             mix_precision: bool = True,
             lambda_t = lambda t: 1.0,  # time-dependent weighting λ(t)
             k: float = 1.0,
-            c: float = 1.0,
             t_max: float =  0.5,
             *args
     ) -> None:
@@ -155,18 +154,20 @@ class TeacherTrainer(nn.Module):
         pred_score = self.score_fn(logp, xt) # derive score form energy
         dsm_loss = self.lambda_t(t_atom.mean().item()) * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
         fp_loss = torch.tensor(0.0, device=self.device)
-        fp_mask = self.fp_gate(x0, pred_score, noise, t_atom, batch_idx, self.k, self.c, self.t_max)
+        fp_mask = self.fp_gate(x0, t_atom, self.k, self.t_max)
         if fp_mask.any():
             xt_active, atom_feat_active, edge_idx_active, batch_active, t_active = self.subset_graph_data(
                     xt, atom_features, edge_index, t_atom, batch_idx, fp_mask, torch.unique(batch_idx[fp_mask])
             )
+            seed1 = self.global_step * 1000
             r1 = self.fp_residual(
-                self.energy_net, xt_active, atom_feat_active,
-                edge_idx_active, t_active, batch_active, self.forward_vp.vs
+                self.energy_net, xt_active, atom_feat_active, edge_idx_active,
+                t_active, batch_active, self.forward_vp.vs, seed1
             )
+            seed2 = self.global_step * 1001
             r2 = self.fp_residual(
-                self.energy_net, xt_active, atom_feat_active,
-                edge_idx_active, t_active, batch_active, self.forward_vp.vs
+                self.energy_net, xt_active, atom_feat_active, edge_idx_active,
+                t_active, batch_active, self.forward_vp.vs, seed2
             )
             var = self.forward_vp.vs.get_variance(t_active)
             fp_loss = self.lambda_t(t_active.mean().item()) * self.fp_loss(r1, r2, var) # weighted fp-loss
@@ -210,7 +211,6 @@ class TeacherTrainer(nn.Module):
         old_to_new_atom[active_atom_mask] = torch.arange(active_atom_mask.sum(), device=xt.device)
         edge_idx_active = old_to_new_atom[edge_idx_active]
         t_active = t[active_atom_mask]
-        #t_active = t[batch_active]
         return xt_active, atom_feat_active, edge_idx_active, batch_active, t_active
 
     def random_rotation_matrix(self, batch_size: int) -> torch.Tensor:
@@ -250,7 +250,6 @@ class TeacherTrainer(nn.Module):
         else:
             print(f"Checkpoint saved at epoch {epoch} with loss {loss: .4f}")
 
-    def sample_time(self, batch_size: int) -> torch.Tensor:
-        """sample time from [0, 1]"""
-        t = torch.rand(batch_size, device=self.device)
-        return t
+    def sample_time(self, batch_size: int, eps: float = 1e-4) -> torch.Tensor:
+        return eps + (1 - eps) * torch.rand(batch_size, device=self.device)
+
