@@ -251,4 +251,3 @@ class TeacherTrainer(nn.Module):
 
     def sample_time(self, batch_size: int, eps: float = 1e-4) -> torch.Tensor:
         return eps + (1 - eps) * torch.rand(batch_size, device=self.device)
-
