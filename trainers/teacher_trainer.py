@@ -63,7 +63,6 @@ class TeacherTrainer(nn.Module):
         self.fp_alpha = fp_alpha
         self.mix_precision = mix_precision
         self.k = k
-        self.c = c
         self.t_max = t_max
         self.global_step = 0
         self.base_lr = optimizer.param_groups[0]['lr']
