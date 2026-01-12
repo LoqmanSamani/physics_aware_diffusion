@@ -9,7 +9,7 @@ from typing import Callable
 
 class MolEnergyTrainer(nn.Module):
     """energy trainer for vp-sde on a molecular dataset"""
-    def __init__(self, energy_net: nn.Module, forward_vp: nn.Module, data_loader, score_fn: Callable,
+    def __init__(self, energy_net: nn.Module, forward_vp: nn.Module, data_loader, noise_fn: Callable,
                  optimizer: torch.optim.Optimizer, loss_fn: Callable, epochs: int, device: str,
                  grad_acc: int, checkpoint: int, log_freq: int, store_path: str,
                  warmup_steps: int = 0, rotation_augmentation: bool = False,
@@ -17,7 +17,7 @@ class MolEnergyTrainer(nn.Module):
         super().__init__()
         self.energy_net = energy_net.to(device)
         self.forward_vp = forward_vp.to(device)
-        self.score_fn = score_fn
+        self.noise_fn = noise_fn
         self.data_loader = data_loader
         self.optimizer = optimizer
         self.loss_fn = loss_fn
@@ -49,8 +49,8 @@ class MolEnergyTrainer(nn.Module):
             epoch_losses = []
             pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             for step, batch in enumerate(pbar):
-                x0 = batch.pos.to(self.device)
-                atom_features = batch.x.to(self.device)
+                x0 = batch.coords.to(self.device)
+                atom_features = batch.atom_features.to(self.device)
                 edge_index = batch.edge_index.to(self.device)
                 batch_idx = batch.batch.to(self.device)
                 noise = torch.randn_like(x0)
@@ -64,33 +64,32 @@ class MolEnergyTrainer(nn.Module):
                         x0[mask] = x0[mask] @ R[mol_idx].T
                         noise[mask] = noise[mask] @ R[mol_idx].T
 
-                time_ = torch.randint(1, self.forward_vp.vs.num_steps, (num_molecules,), device=self.device)
-                time_per_atom = time_[batch_idx]
-                t_norm_per_atom = time_per_atom.float() / (self.forward_vp.vs.num_steps - 1)
+                t_mol = self.sample_time(num_molecules)  # (num_molecules,)
+                t_atom = t_mol[batch_idx]  # (num_atoms,)
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
-                        xt, true_score = self.forward_vp(x0, noise, time_per_atom)
-                        std_per_atom = self.forward_vp.vs.get_std(time_per_atom)
-                        variance = self.forward_vp.vs.get_variance(time_per_atom)
+                        xt, true_score = self.forward_vp(x0, noise, t_atom)
+                        std_per_atom = self.forward_vp.vs.get_std(t_atom)
+                        variance = self.forward_vp.vs.get_variance(t_atom)
                         while std_per_atom.dim() < noise.dim():
                             std_per_atom = std_per_atom.unsqueeze(-1)
                         xt.requires_grad_(True)
-                        logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch_idx)
-                        pred_score = self.score_fn(logp, xt)
-                        loss_ = self.loss_fn(pred_score, true_score, variance, batch_idx) / self.grad_acc
-                        weight = self.lambda_t(t_norm_per_atom.mean().item())
+                        logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
+                        pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
+                        loss_ = self.loss_fn(pred_noise, noise, variance, batch_idx) / self.grad_acc
+                        weight = self.lambda_t(t_atom.mean().item())
                         loss = weight * loss_
                     self.scaler.scale(loss).backward()
                 else:
-                    xt, true_score = self.forward_vp(x0, noise, time_per_atom)
-                    std_per_atom = self.forward_vp.vs.get_std(time_per_atom)
+                    xt, true_score = self.forward_vp(x0, noise, t_atom)
+                    std_per_atom = self.forward_vp.vs.get_std(t_atom)
                     while std_per_atom.dim() < noise.dim():
                         std_per_atom = std_per_atom.unsqueeze(-1)
                     xt.requires_grad_(True)
-                    logp = self.energy_net(xt, atom_features, edge_index, t_norm_per_atom, batch_idx)
-                    pred_score = self.score_fn(logp, xt)
+                    logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
+                    pred_score = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
                     loss_ = self.loss_fn(pred_score, true_score, variance, batch_idx) / self.grad_acc
-                    weight = self.lambda_t(t_norm_per_atom.mean().item())
+                    weight = self.lambda_t(t_atom.mean().item())
                     loss = weight * loss_
                     loss.backward()
 
@@ -151,6 +150,12 @@ class MolEnergyTrainer(nn.Module):
         det = torch.det(Q)
         Q = Q * det.view(-1, 1, 1).sign()
         return Q
+    def sample_time(self, batch_size: int, eps: float = 1e-5, use_epsilon: bool = False) -> torch.Tensor:
+        """optionally sample time from [eps, 1-eps] instead (0, 1] which enhance stability"""
+        t = torch.rand(batch_size, device=self.device)
+        if use_epsilon:
+            t = eps + (1.0 - 2 * eps) * t
+        return t
 
     def _save_checkpoint(self, epoch: int, loss: float, train_losses: list, is_best: bool = False) -> None:
         checkpoint = {

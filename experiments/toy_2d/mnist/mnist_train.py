@@ -48,7 +48,7 @@ data_loader = get_mnist_subset_dataloader(
     subset_fraction=cfg["dataset"]["subset_fraction"],
 )
 
-checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/vp_best.pth", map_location="cpu")
+checkpoint = torch.load("/experiments/toy_2d/mnist/vp_best.pth", map_location="cpu")
 score_net.load_state_dict(checkpoint["score_net_state"])
 optimizer.load_state_dict(checkpoint["optimizer_state"])
 vs.load_state_dict(checkpoint["scheduler"])

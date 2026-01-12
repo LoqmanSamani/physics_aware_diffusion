@@ -19,7 +19,7 @@ vs = LinearVS(
 ).to("cuda")
 
 reverse_vp = ReverseVP(vs).to("cuda")
-checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/vp_best.pth", map_location="cpu")
+checkpoint = torch.load("/experiments/toy_2d/mnist/vp_best.pth", map_location="cpu")
 score_net = TinyUNet(
     in_channels=cfg["dataset"]["channels"],
     base_channels=cfg["model"]["base_channels"],

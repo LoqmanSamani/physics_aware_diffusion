@@ -7,7 +7,7 @@ from typing import Tuple
 
 class ForwardVP(nn.Module):
     """continuous-time vp-sde forward process"""
-    def __init__(self, variance_scheduler: LinearVS, eps: float = 1e-8):
+    def __init__(self, variance_scheduler: LinearVS, eps: float = 1e-5):
         super().__init__()
         self.vs = variance_scheduler
         self.eps = eps

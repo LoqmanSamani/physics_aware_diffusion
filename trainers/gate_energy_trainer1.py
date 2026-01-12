@@ -176,7 +176,7 @@ class FPEnergyTrainer(nn.Module):
         xt, true_score = self.forward_vp(x0, noise, t_atom)
         xt = xt.detach().requires_grad_(True)
         logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
-        pred_noise = self.noise_fn(logp, xt, self.forward_vp.vs)
+        pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
         pred_score = self.score_fn(logp, xt)
         var = self.forward_vp.vs.get_variance(t_atom)
         dsm_loss = self.lambda_t(t_atom.mean().item()) * self.dsm_loss(pred_noise, noise, var) # weighted dsm-loss

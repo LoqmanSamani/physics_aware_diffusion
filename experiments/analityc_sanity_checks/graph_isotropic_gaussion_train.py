@@ -1,53 +1,11 @@
 import torch
-from torch_geometric.data import Data
+from data.synthetic.graph_3d import GaussianPyGDataset
 from torch_geometric.loader import DataLoader
 from score_nets.graph_score_net import GraphScoreNet
 from trainers.graph_score_trainer import AnalyticScoreTrainer
+from losses.graph_score_fn import gaussian_score_fn
 from pathlib import Path
 from configs.load_config import load_config
-
-
-
-class GaussianPyGDataset(torch.utils.data.Dataset):
-    """
-    multi-node isotropic Gaussian dataset
-    each graph can have variable number of nodes and edges.
-    """
-    def __init__(self, n_samples: int, min_nodes=1, max_nodes=5, sigma_min=0.1, sigma_max=2.0):
-        self.n_samples = n_samples
-        self.min_nodes = min_nodes
-        self.max_nodes = max_nodes
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-
-    def __len__(self):
-        return self.n_samples
-
-    def __getitem__(self, idx):
-        num_nodes = torch.randint(self.min_nodes, self.max_nodes + 1, (1,)).item()
-        t = torch.rand(1)
-        sigma_t = self.sigma_min * (self.sigma_max / self.sigma_min) ** t
-        x_t = sigma_t * torch.randn(num_nodes, 3)
-        atom_features = torch.ones(num_nodes, 1)
-        edges = []
-        for i in range(num_nodes):
-            for j in range(num_nodes):
-                if i != j and torch.rand(1).item() < 0.5:
-                    edges.append([i, j])
-        if len(edges) == 0 and num_nodes > 1:
-            edges = [[0, 1]]
-        edge_index = torch.tensor(edges, dtype=torch.long).t() if edges else torch.empty(2, 0, dtype=torch.long)
-        return Data(
-            x=atom_features,
-            pos=x_t,
-            edge_index=edge_index,
-            t=t,
-            sigma_t=sigma_t
-        )
-
-def gaussian_score_fn(x_t, sigma_t, **kwargs):
-    """∇ log N(0, σ²I) = -x / σ²"""
-    return -x_t / (sigma_t.unsqueeze(-1) ** 2)
 
 
 project_root = Path(__file__).parent.parent.parent

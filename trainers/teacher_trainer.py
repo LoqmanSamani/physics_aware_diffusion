@@ -21,7 +21,6 @@ class TeacherTrainer(nn.Module):
             fp_loss: Callable, # fokker-planck loss
             dsm_loss: Callable, # denoising score matching loss
             noise_fn: Callable, # computes noise from energy
-            score_fn: Callable,  # computes score from energy
             fp_residual: Callable, # computes weak fokker-planck residuals
             val_loader: None,
             epochs: int,
@@ -49,7 +48,6 @@ class TeacherTrainer(nn.Module):
         self.fp_gate = fp_gate
         self.fp_loss = fp_loss
         self.dsm_loss = dsm_loss
-        self.score_fn = score_fn
         self.noise_fn = noise_fn
         self.fp_residual = fp_residual
         self.epochs = epochs
@@ -77,7 +75,7 @@ class TeacherTrainer(nn.Module):
         self.energy_net.train()
         for epoch in range(self.epochs):
             pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
-            mean_losses = self.train_batch(pbar, epoch)
+            mean_losses = self.train_batch(pbar)
             self.losses['total_losses'].append(mean_losses[0])
             self.losses['dsm_losses'].append(mean_losses[1])
             self.losses['fp_losses'].append(mean_losses[2])
@@ -97,7 +95,7 @@ class TeacherTrainer(nn.Module):
                 self.save_checkpoint(epoch + 1, mean_losses[0], is_best=True)
         return self.losses
 
-    def train_batch(self, pbar, epoch):
+    def train_batch(self, pbar):
         """train one epoch of teacher model"""
         total_losses = []
         dsm_losses = []
@@ -132,6 +130,12 @@ class TeacherTrainer(nn.Module):
                 self.global_step += 1
                 self.update_learning_rate()
             total_losses.append(step_losses[0].item() * self.grad_acc)
+            #pbar.set_postfix({'loss': f'{step_losses[0].item() * self.grad_acc:.4f}'})
+            pbar.set_postfix({
+                'total': f'{step_losses[0].item() * self.grad_acc:.4f}',
+                'dsm': f'{step_losses[1].item() * self.grad_acc:.4f}',
+                'fp': f'{step_losses[2].item() * self.grad_acc:.4f}'
+            })
             dsm_losses.append(step_losses[1].item() * self.grad_acc)
             fp_losses.append(step_losses[2].item() * self.grad_acc)
         if self.global_step >= self.warmup_steps:
@@ -148,12 +152,11 @@ class TeacherTrainer(nn.Module):
         t_atom = t_mol[batch_idx] # (num_atoms,)
         xt, true_score = self.forward_vp(x0, noise, t_atom)
         xt = xt.detach().requires_grad_(True)
-        logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
-        pred_noise = self.noise_fn(logp, xt) # derive score form energy and then convert it to noise
-        pred_score = self.score_fn(logp, xt) # derive score form energy
+        logp = self.energy_net(xt, atom_features, edge_index, t_atom)
+        pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs) # derive score form energy and then convert it to noise
         dsm_loss = self.lambda_t(t_atom.mean().item()) * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
         fp_loss = torch.tensor(0.0, device=self.device)
-        fp_mask = self.fp_gate(x0, t_atom, self.k, self.t_max)
+        fp_mask = self.fp_gate(x0, t_atom, self.forward_vp.vs, self.k, self.t_max)
         if fp_mask.any():
             xt_active, atom_feat_active, edge_idx_active, batch_active, t_active = self.subset_graph_data(
                     xt, atom_features, edge_index, t_atom, batch_idx, fp_mask, torch.unique(batch_idx[fp_mask])
@@ -169,7 +172,7 @@ class TeacherTrainer(nn.Module):
                 t_active, batch_active, self.forward_vp.vs, seed2
             )
             var = self.forward_vp.vs.get_variance(t_active)
-            fp_loss = self.lambda_t(t_active.mean().item()) * self.fp_loss(r1, r2, var) # weighted fp-loss
+            fp_loss = self.lambda_t(t_active.mean().item()) * self.fp_loss(r1, r2, var, alpha=self.fp_alpha) # weighted fp-loss
         total_loss = (dsm_loss + fp_loss) / self.grad_acc
         fp_loss = fp_loss / self.grad_acc
         dsm_loss = dsm_loss / self.grad_acc
@@ -190,9 +193,8 @@ class TeacherTrainer(nn.Module):
             t_atom = t_mol[batch_idx]  # (num_atoms,)
             xt, true_score = self.forward_vp(x0, noise, t_atom)
             xt = xt.detach().requires_grad_(True)
-            logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
-            pred_noise = self.noise_fn(logp, xt)
-            var = self.forward_vp.vs.get_variance(t_atom)
+            logp = self.energy_net(xt, atom_features, edge_index, t_atom)
+            pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
             loss = self.lambda_t(t_atom.mean().item()) * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
             val_losses.append(loss.item())
         return sum(val_losses) / len(val_losses)

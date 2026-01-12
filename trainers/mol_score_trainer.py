@@ -45,14 +45,13 @@ class MolScoreTrainer(nn.Module):
             epoch_losses = []
             pbar = tqdm(self.data_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             for step, batch in enumerate(pbar):
-                x = batch.pos.to(self.device)
-                atom_features = batch.x.to(self.device)
+                x = batch.coords.to(self.device)
+                atom_features = batch.atom_features.to(self.device)
                 edge_index = batch.edge_index.to(self.device)
                 batch_idx = batch.batch.to(self.device)
                 noise = torch.randn_like(x)
                 num_molecules = batch.num_graphs
                 if self.rotation_augmentation:
-                    num_molecules = batch.num_graphs
                     R = self.random_rotation_matrix(num_molecules, self.device)
                     # rotate positions and noise consistently per molecule
                     for mol_idx in range(num_molecules):
@@ -60,9 +59,10 @@ class MolScoreTrainer(nn.Module):
                         x[mask] = x[mask] @ R[mol_idx].T
                         noise[mask] = noise[mask] @ R[mol_idx].T
 
-                time_ = torch.randint(1, self.forward_vp.vs.num_steps, (num_molecules,), device=self.device)
+                time_ = torch.rand(num_molecules, device=self.device)
+                time_ = 1e-4 + (1.0 - 2 * 1e-4) * time_
                 time_per_atom = time_[batch_idx]
-                t_norm_per_atom = time_per_atom.float() / (self.forward_vp.vs.num_steps - 1)
+                #t_norm_per_atom = time_per_atom.float() / (self.forward_vp.vs.num_steps - 1)
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
                         noisy_x, true_score = self.forward_vp(x, noise, time_per_atom)
@@ -72,7 +72,7 @@ class MolScoreTrainer(nn.Module):
                             std_per_atom = std_per_atom.unsqueeze(-1)
                         pred_noise = self.score_net(
                             data=noisy_x, atom_features=atom_features, edge_index=edge_index,
-                            time_=t_norm_per_atom, batch=batch_idx
+                            time_=time_per_atom, batch=batch_idx
                         )
                         #if epoch == 10:
                         #    print("true score")
@@ -92,7 +92,7 @@ class MolScoreTrainer(nn.Module):
                         std_per_atom = std_per_atom.unsqueeze(-1)
                     score = self.score_net(
                         data=noisy_x, atom_features=atom_features, edge_index=edge_index,
-                        time_=t_norm_per_atom, batch=batch_idx
+                        time_=time_per_atom, batch=batch_idx
                     )
                     #print("true score")
                     #print("*********************************")

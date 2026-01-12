@@ -1,0 +1,77 @@
+experiment:
+  name: fp_energy_with_trainable_gate
+  seed: 42
+
+dataset:
+  type: SyntheticMolecularDataset
+  n_molecules: 10000
+  n_atom_types: 1
+  min_atoms: 10
+  max_atoms: 20
+  seed: 42
+
+dataloader:
+  batch_size: 64
+  shuffle: true
+
+val_dataloader:
+  batch_size: 8
+  shuffle: true
+
+diffusion:
+  forward_process: ForwardVP
+  variance_schedule:
+    type: LinearVS
+    beta_start: 0.1
+    beta_end: 20.0
+    min_variance: 0.0005
+
+models:
+  energy_net:
+    type: GraphEnergyNet
+    atom_dim: 1
+    hidden_dim: 256
+    num_layers: 4
+    dropout: 0.1
+
+  fp_gate:
+    type: FPGate
+    hidden_dim: 256
+
+optimizers:
+  energy_optimizer:
+    type: AdamW
+    lr: 0.0001
+    weight_decay: 0.0001
+    betas: [0.9, 0.999]
+
+  gate_optimizer:
+    type: AdamW
+    lr: 0.0001
+    weight_decay: 0.0001
+    betas: [0.9, 0.999]
+
+losses:
+  fp_loss: fokker_planck_loss
+  dsm_loss: mse_loss
+
+physics:
+  score_fn: score_from_energy
+  noise_fn: noise_from_energy
+  fp_residual: heavy_fp_residual
+
+trainer:
+  type: FPEnergyTrainer
+  epochs: 50
+  grad_acc: 2
+  warmup_steps: 500
+  gate_epochs: 10
+  rotation_augment: false
+  mixed_precision: false
+  compute_oracle: true
+  lambda_t: 1.0
+
+logging:
+  log_freq: 5
+  checkpoint_freq: 10
+  store_path: "./checkpoints/fp_trainable_gate"

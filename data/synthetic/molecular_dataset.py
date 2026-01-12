@@ -26,20 +26,26 @@ class SyntheticMolecularDataset(torch.utils.data.Dataset):
         for i in range(self.n_molecules):
             num_atoms = np.random.randint(self.min_atoms, self.max_atoms + 1)
             geometry = np.random.choice(geometry_types)
+
             if geometry == 'gaussian_blob':
                 pos = self._create_gaussian_blob(num_atoms)
             elif geometry == 'ring':
                 pos = self._create_ring(num_atoms)
             else:
                 pos = self._create_linear_chain(num_atoms)
+
             pos = pos - pos.mean(dim=0, keepdim=True)
+
+            # Always create one-hot encoded features based on n_atom_types
             if self.use_atom_types and self.n_atom_types > 1:
                 atom_type_indices = torch.randint(0, self.n_atom_types, (num_atoms,))
-                atom_features = torch.nn.functional.one_hot(
-                    atom_type_indices, num_classes=self.n_atom_types
-                ).float()
             else:
-                atom_features = torch.ones(num_atoms, 1)
+                # Use a single atom type (e.g., type 0) for all atoms
+                atom_type_indices = torch.zeros(num_atoms, dtype=torch.long)
+
+            atom_features = torch.nn.functional.one_hot(
+                atom_type_indices, num_classes=self.n_atom_types
+            ).float()
 
             edge_index = self._create_edges(num_atoms, geometry)
             molecules.append({
@@ -50,6 +56,7 @@ class SyntheticMolecularDataset(torch.utils.data.Dataset):
                 'geometry': geometry
             })
         return molecules
+
 
     def _create_gaussian_blob(self, num_atoms: int) -> torch.Tensor:
         """random 3D blob with unit variance"""

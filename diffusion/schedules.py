@@ -3,16 +3,16 @@ import torch.nn as nn
 import numpy as np
 
 
-
 class LinearVS(nn.Module):
-    """variance schedule with minimum variance clipping to prevent explosion"""
+    """linear variance schedule"""
+
     def __init__(self, beta_start=0.1, beta_end=20.0, min_variance=1e-5):
         super().__init__()
         if not (0.0 < beta_start < beta_end):
             raise ValueError("Require 0 < beta_start < beta_end")
         self.beta_start = beta_start
         self.beta_end = beta_end
-        self.min_variance = min_variance # critical for training stability (it prevents true score exploding)
+        self.min_variance = min_variance
 
     def beta(self, t: torch.Tensor) -> torch.Tensor:
         """β(t)"""
@@ -20,17 +20,31 @@ class LinearVS(nn.Module):
 
     def integral_beta(self, t: torch.Tensor) -> torch.Tensor:
         """∫₀ᵗ β(s) ds"""
-        return self.beta_start * t + 0.5 * (self.beta_end - self.beta_start) * t**2
+        return self.beta_start * t + 0.5 * (self.beta_end - self.beta_start) * t ** 2
+
+    def alpha(self, t: torch.Tensor) -> torch.Tensor:
+        """α(t) = exp(-∫₀ᵗ β(s) ds)"""
+        return torch.exp(-self.integral_beta(t))
+
+    def alpha_squared(self, t: torch.Tensor) -> torch.Tensor:
+        """α²(t) = exp(-2∫₀ᵗ β(s) ds)"""
+        return torch.exp(-2.0 * self.integral_beta(t))
 
     def get_variance(self, t: torch.Tensor) -> torch.Tensor:
         """σ²(t) = 1 - exp(-∫β), clipped to minimum value"""
         variance = 1.0 - torch.exp(-self.integral_beta(t))
-        #return torch.clamp(variance, min=self.min_variance)
+        # return torch.clamp(variance, min=self.min_variance)
         return variance
 
     def get_std(self, t: torch.Tensor) -> torch.Tensor:
         """σ(t) = √(σ²(t))"""
         return torch.sqrt(self.get_variance(t))
+
+    def snr(self, t: torch.Tensor) -> torch.Tensor:
+        """Signal-to-noise ratio: SNR(t) = α²(t) / σ²(t)"""
+        alpha_sq = self.alpha_squared(t)
+        variance = self.get_variance(t)
+        return alpha_sq / (variance + 1e-8)
 
     def get_drift_coeff(self, t: torch.Tensor) -> torch.Tensor:
         """-½ β(t)"""
