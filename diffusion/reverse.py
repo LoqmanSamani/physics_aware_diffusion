@@ -4,36 +4,77 @@ from diffusion.schedules import LinearVS
 
 
 class ReverseVP(nn.Module):
-    """reverse diffusion using reverse-time sde for continuous-time vp"""
-
-    def __init__(self, variance_scheduler: LinearVS, eps: float = 1e-3) -> None:
+    """
+    reverse-time dynamics for vp-sde with explicit mode switching
+    modes:
+        - 'sde' : stochastic reverse sde (teacher / sampling)
+        - 'ode' : deterministic probability flow ode (distillation / student)
+    """
+    def __init__(self, variance_scheduler: LinearVS, eps: float = 1e-5, default_mode: str = "ode"):
         super().__init__()
+        assert default_mode in ("sde", "ode")
         self.vs = variance_scheduler
         self.eps = eps
-    def forward(self, xt: torch.Tensor, pred_score: torch.Tensor,
-                t: torch.Tensor, dt: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        self.default_mode = default_mode
+
+    def _broadcast_coeff(self, coeff: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        while coeff.dim() < x.dim():
+            coeff = coeff.unsqueeze(-1)
+        return coeff
+
+    def _reverse_sde_drift(self, x, score, t):
         """
-        reverse sde: dx = [f(x,t) - g²(t)∇log p_t(x)] dt + g(t) dw̄
-        for vp-sde:
-            - f(x,t) = -½β(t)x  (drift)
-            - g(t) = √β(t)      (diffusion)
+        drift of reverse-time sde:
+        f(x,t) - g(t)^2 * score
+        """
+        beta_half = self.vs.get_drift_coeff(t)          # -½β(t)
+        g = self.vs.get_diffusion_coeff(t)              # √β(t)
+        beta_half = self._broadcast_coeff(beta_half, x)
+        g = self._broadcast_coeff(g, x)
+        return beta_half * x - (g ** 2) * score
+
+    def _reverse_ode_drift(self, x, score, t):
+        """
+        drift of probability flow ode:
+        f(x,t) - ½ g(t)^2 * score
+        """
+        beta_half = self.vs.get_drift_coeff(t)          # -½β(t)
+        g = self.vs.get_diffusion_coeff(t)
+        beta_half = self._broadcast_coeff(beta_half, x)
+        g = self._broadcast_coeff(g, x)
+        return beta_half * x - 0.5 * (g ** 2) * score
+
+    def forward(self, xt: torch.Tensor, score: torch.Tensor, t: torch.Tensor, dt,
+                *, noise: torch.Tensor = None, mode: str = None) -> torch.Tensor:
+        """
+        perform one reverse-time step.
         arguments:
             xt: current state at time t
-            score_pred: predicted score ∇log p_t(x)
-            t: continuous time in (0, 1)
-            dt: time step (negative for reverse)
-            noise: standard Gaussian noise
+            score: ∇_x log p_t(x)
+            t: current time (in (0, 1))
+            dt: positive time step size
+            noise: Gaussian noise (required for sde mode)
+            mode: 'sde' or 'ode' (overrides default_mode)
         """
-        drift_coeff = self.vs.get_drift_coeff(t)  # -½β(t)
-        diffusion_coeff = self.vs.get_diffusion_coeff(t)  # √β(t)
-        while drift_coeff.dim() < xt.dim():
-            drift_coeff = drift_coeff.unsqueeze(-1)
-            diffusion_coeff = diffusion_coeff.unsqueeze(-1)
-        drift_term = drift_coeff * xt - (diffusion_coeff ** 2) * pred_score
-        diffusion_term = diffusion_coeff * noise
-        # euler-maruyama step
-        xt_prev = xt + drift_term * dt + diffusion_term * torch.sqrt(torch.abs(dt))
+        if not torch.is_tensor(dt):
+            dt = torch.tensor(dt, device=xt.device, dtype=xt.dtype)
+        while dt.dim() < xt.dim():
+            dt = dt.unsqueeze(-1)
+        assert torch.all(dt > 0), "dt must be positive"
+        mode = mode or self.default_mode
+        assert mode in ("sde", "ode")
+        if mode == "sde":
+            if noise is None:
+                noise = torch.randn_like(xt)
+            drift = self._reverse_sde_drift(xt, score, t)
+            g = self.vs.get_diffusion_coeff(t)
+            g = self._broadcast_coeff(g, xt)
+            xt_prev = xt + drift * dt + g * noise * torch.sqrt(dt)
+        else:  # 'ode'
+            drift = self._reverse_ode_drift(xt, score, t)
+            xt_prev = xt + drift * dt
         return xt_prev
+
 
 
 

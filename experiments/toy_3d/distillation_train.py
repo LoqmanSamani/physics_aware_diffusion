@@ -1,20 +1,21 @@
 import torch
 from data.synthetic.molecular_dataset import SyntheticMolecularDataset, create_dataloader
-from trainers.teacher_trainer import TeacherTrainer
+from trainers.distillation_trainer import DistTrainer
 from score_nets.energy_net import GraphEnergyNet
 from diffusion.forward import ForwardVP
+from diffusion.reverse import ReverseVP
 from diffusion.schedules import LinearVS
 from losses.dsm_losses import mse_loss, dsm_loss
 from losses.fp_losses import snr_fokker_planck_loss, fokker_planck_loss
 from physics.fp_residuals import heavy_fp_residual, light_fp_residual
-from physics.derive_noise import noise_from_energy
+from physics.derive_score import score_from_energy
 from physics.drift_score_gate import fp_gate_
 from pathlib import Path
 from configs.load_config import load_config
 
 
 project_root = Path(__file__).parent.parent.parent
-config_path = project_root / "configs" / "teacher_train.yaml"
+config_path = project_root / "configs" / "distillation_train.yaml"
 cfg = load_config(str(config_path))
 
 
@@ -55,6 +56,18 @@ vs = LinearVS(
 )
 
 fwd = ForwardVP(vs, 1e-5)
+rwd = ReverseVP(vs, 1e-5)
+
+# teacher energy net which has the same structure as student
+# this model is already trained and is frozen through distillation training
+t_energy_net = GraphEnergyNet(
+    atom_dim= cfg['model']['atom_dim'],
+    hidden_dim=128, #cfg['model']['hidden_dim'],
+    num_layers=4, #cfg['model']['num_layers'],
+    edge_dim = 36,
+    num_heads=2,
+    dropout=cfg['model']['dropout'],
+)
 
 energy_net = GraphEnergyNet(
     atom_dim= cfg['model']['atom_dim'],
@@ -73,15 +86,18 @@ optim = torch.optim.AdamW(
     betas=cfg['training']['betas']
 )
 
-trainer = TeacherTrainer(
+trainer = DistTrainer(
+    t_energy_net = t_energy_net,
     energy_net = energy_net,
     forward_vp = fwd,
+    reverse_vp = rwd,
+    dt = torch.tensor([0.01]),
     data_loader = dataloader,
     optimizer = optim,
     fp_gate = fp_gate_,
     fp_loss = snr_fokker_planck_loss,
-    dsm_loss = mse_loss,
-    noise_fn = noise_from_energy,
+    dist_loss = mse_loss,
+    score_fn = score_from_energy,
     fp_residual = heavy_fp_residual,
     val_loader = val_loader,
     epochs =  50,
@@ -92,8 +108,9 @@ trainer = TeacherTrainer(
     store_path = "./checkpoints",
     warmup_steps = 400,
     rotation_augment = True,
+    fp_alpha = 5e-4,
+    mix_precision = True,
     k = 1.0,
-    t_max = 0.4
+    t_max = 0.1
 )
-
 losses = trainer()

@@ -4,6 +4,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.amp import GradScaler
 from typing import Callable, Tuple
 from torch.nn.utils import clip_grad_norm_
+from contextlib import contextmanager
 from tqdm import tqdm
 import os
 
@@ -33,7 +34,7 @@ class TeacherTrainer(nn.Module):
             rotation_augment: bool = False, # if true molecules will be randomly augmented throw training
             fp_alpha: float = 5e-4,
             mix_precision: bool = True,
-            lambda_t = lambda t: 1.0,  # time-dependent weighting λ(t)
+            lambda_t: Callable[[torch.Tensor], torch.Tensor] = lambda t: torch.exp(-t), # time-dependent weighting λ(t)
             k: float = 1.0,
             t_max: float =  0.5,
             *args
@@ -69,6 +70,7 @@ class TeacherTrainer(nn.Module):
         self.scaler = GradScaler('cuda') if self.use_amp else None
         self.scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
         self.losses = {'total_losses': [], 'dsm_losses': [], 'fp_losses': [], 'val_losses': []}
+        self.t_min = self.forward_vp.eps
 
 
     def forward(self):
@@ -148,13 +150,24 @@ class TeacherTrainer(nn.Module):
     def train_step(self, x0: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                    batch_idx: torch.Tensor, num_molecules: int):
         noise = torch.randn_like(x0)
-        t_mol = self.sample_time(num_molecules) # (num_molecules,)
+        # random rotations during training so that the network
+        # learns rotational equivariance via data augmentation
+        if self.rotation_augment:
+            # autocast disabled for precise augmentation
+            with torch.amp.autocast('cuda', enabled=False):
+                R = self.random_rotation_matrix(num_molecules)
+                for mol_idx in range(num_molecules):
+                    mask = batch_idx == mol_idx
+                    x0[mask] = x0[mask] @ R[mol_idx].T
+                    noise[mask] = noise[mask] @ R[mol_idx].T
+        t_mol = self.sample_time(num_molecules, self.t_min) # (num_molecules,)
         t_atom = t_mol[batch_idx] # (num_atoms,)
+        lambda_val = self.lambda_t(t_atom.mean())
         xt, true_score = self.forward_vp(x0, noise, t_atom)
         xt = xt.detach().requires_grad_(True)
         logp = self.energy_net(xt, atom_features, edge_index, t_atom)
         pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs) # derive score form energy and then convert it to noise
-        dsm_loss = self.lambda_t(t_atom.mean().item()) * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
+        dsm_loss = lambda_val * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
         fp_loss = torch.tensor(0.0, device=self.device)
         fp_mask = self.fp_gate(x0, t_atom, self.forward_vp.vs, self.k, self.t_max)
         if fp_mask.any():
@@ -172,7 +185,8 @@ class TeacherTrainer(nn.Module):
                 t_active, batch_active, self.forward_vp.vs, seed2
             )
             var = self.forward_vp.vs.get_variance(t_active)
-            fp_loss = self.lambda_t(t_active.mean().item()) * self.fp_loss(r1, r2, var, alpha=self.fp_alpha) # weighted fp-loss
+            fp_lambda_val = self.lambda_t(t_active.mean())
+            fp_loss = fp_lambda_val * self.fp_loss(r1, r2, var, alpha=self.fp_alpha) # weighted fp-loss
         total_loss = (dsm_loss + fp_loss) / self.grad_acc
         fp_loss = fp_loss / self.grad_acc
         dsm_loss = dsm_loss / self.grad_acc
@@ -180,7 +194,6 @@ class TeacherTrainer(nn.Module):
 
     def validate(self):
         """validation without fp regularization"""
-        #self.energy_net.eval()
         val_losses = []
         for batch in self.val_loader:
             x0 = batch.coords.to(self.device)
@@ -189,14 +202,16 @@ class TeacherTrainer(nn.Module):
             batch_idx = batch.batch.to(self.device)
             num_molecules = batch.num_graphs
             noise = torch.randn_like(x0)
-            t_mol = self.sample_time(num_molecules)  # (num_molecules,)
+            t_mol = self.sample_time(num_molecules, self.t_min)  # (num_molecules,)
             t_atom = t_mol[batch_idx]  # (num_atoms,)
+            lambda_val = self.lambda_t(t_atom.mean())
             xt, true_score = self.forward_vp(x0, noise, t_atom)
-            xt = xt.detach().requires_grad_(True)
-            logp = self.energy_net(xt, atom_features, edge_index, t_atom)
-            pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
-            loss = self.lambda_t(t_atom.mean().item()) * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
-            val_losses.append(loss.item())
+            with self.freeze_params(self.energy_net):
+                xt = xt.detach().requires_grad_(True)
+                logp = self.energy_net(xt, atom_features, edge_index, t_atom)
+                pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
+                loss = lambda_val * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
+                val_losses.append(loss.item())
         return sum(val_losses) / len(val_losses)
 
     def subset_graph_data(self, xt, atom_features, edge_index, t, batch_idx, active_atom_mask, active_mol_indices):
@@ -251,5 +266,17 @@ class TeacherTrainer(nn.Module):
         else:
             print(f"Checkpoint saved at epoch {epoch} with loss {loss: .4f}")
 
-    def sample_time(self, batch_size: int, eps: float = 1e-4) -> torch.Tensor:
+    def sample_time(self, batch_size: int, eps: float = 1e-5) -> torch.Tensor:
         return eps + (1 - eps) * torch.rand(batch_size, device=self.device)
+
+    @contextmanager
+    def freeze_params(self, module):
+        old_requires_grad = []
+        for p in module.parameters():
+            old_requires_grad.append(p.requires_grad)
+            p.requires_grad_(False)
+        try:
+            yield
+        finally:
+            for p, rg in zip(module.parameters(), old_requires_grad):
+                p.requires_grad_(rg)
