@@ -194,6 +194,7 @@ class TeacherTrainer(nn.Module):
 
     def validate(self):
         """validation without fp regularization"""
+        self.energy_net.eval()
         val_losses = []
         for batch in self.val_loader:
             x0 = batch.coords.to(self.device)
@@ -212,6 +213,7 @@ class TeacherTrainer(nn.Module):
                 pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
                 loss = lambda_val * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
                 val_losses.append(loss.item())
+        self.energy_net.train()
         return sum(val_losses) / len(val_losses)
 
     def subset_graph_data(self, xt, atom_features, edge_index, t, batch_idx, active_atom_mask, active_mol_indices):

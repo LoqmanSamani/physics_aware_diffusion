@@ -41,7 +41,7 @@ class MNISTSampler(nn.Module):
         iterator = tqdm(range(num_steps), desc="Sampling")
         with torch.no_grad():
             for step in iterator:
-                t_current = t_schedule[step]
+                t_current = float(t_schedule[step])
                 t_batch = torch.full((self.batch_size,), t_current, dtype=torch.float32, device=self.device)
                 pred_score = self.score_net(xt, t_batch)
                 if step < num_steps - 1:

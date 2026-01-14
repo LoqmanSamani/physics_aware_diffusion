@@ -253,6 +253,7 @@ class DistTrainer(nn.Module):
 
     def validate(self):
         """validation without fp regularization"""
+        self.energy_net.eval()
         val_losses = []
         for batch in self.val_loader:
             x0 = batch.coords.to(self.device)
@@ -303,6 +304,7 @@ class DistTrainer(nn.Module):
                         )
                     dist_loss = lambda_val * self.dist_loss(xt_st_2dt, xt_2dt.detach())
                     val_losses.append(dist_loss.item())
+        self.energy_net.train()
         return sum(val_losses) / len(val_losses)
 
     def subset_graph_data(self, xt, atom_features, edge_index, t, batch_idx, active_atom_mask, active_mol_indices):
