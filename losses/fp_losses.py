@@ -1,14 +1,31 @@
 import torch
+from torch_scatter import scatter_mean
 
-def snr_fokker_planck_loss(r1, r2, variance, gamma=5.0, alpha=5e-4, *args):
-    """compute snr weighted fokker-planck loss with independent fokker-planck residuals"""
+def fokker_planck_loss(r1: torch.Tensor, r2: torch.Tensor, batch_idx: torch.Tensor,* , alpha: float = 5e-4) -> torch.Tensor:
+    """
+    r1, r2: (num_atoms,)
+    batch_idx: (num_atoms,)
+    """
+    # per-atom squared residuals
+    atom_loss = 0.5 * (r1**2 + r2**2)  # (num_atoms,)
+    # average per molecule
+    mol_loss = scatter_mean(atom_loss, batch_idx, dim=0)  # (num_molecules,)
+    return alpha * mol_loss.mean()
+
+
+def snr_fokker_planck_loss(r1: torch.Tensor, r2: torch.Tensor, batch_idx: torch.Tensor, *,
+                           variance: torch.Tensor, gamma: float = 5.0, alpha: float = 5e-4) -> torch.Tensor:
+    """
+    r1, r2, variance: (num_atoms,)
+    batch_idx: (num_atoms,)
+    """
     snr = (1.0 - variance) / variance.clamp(min=1e-8)
     gamma_t = torch.full_like(snr, gamma)
     weight = torch.minimum(snr, gamma_t)
-    return alpha * 0.5 * (weight * (r1**2 + r2**2)).mean()
+    atom_loss = 0.5 * weight * (r1**2 + r2**2)  # (num_atoms,)
+    mol_loss = scatter_mean(atom_loss, batch_idx, dim=0)  # (num_molecules,)
+
+    return alpha * mol_loss.mean()
 
 
-def fokker_planck_loss(r1: torch.Tensor, r2, alpha: float = 5e-4, *args) -> torch.Tensor:
-    """compute fokker-planck loss with independent fokker-planck residuals"""
-    return alpha * 0.5 * (r1**2 + r2**2).mean()
 

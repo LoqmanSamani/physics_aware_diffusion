@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from torch_scatter import scatter_softmax, scatter_add
-import math
 from typing import Optional
 
 
@@ -14,32 +13,32 @@ class GraphEnergyNet(nn.Module):
     """
     def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, edge_dim: int = 36, num_heads: int = 4, dropout: float = 0.1, *args) -> None:
         super().__init__()
-        self.pos_encoder = PositionalEncoding(hidden_dim)
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
             MultiHeadGraphTransformer(hidden_dim, edge_dim, num_heads, dropout) for _ in range(num_layers)
         ])
         self.energy_head = EnergyHead(hidden_dim)
 
-    def forward(self, coords: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, coords: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor, t: torch.Tensor,
+                batch_idx: Optional[torch.Tensor] = None, reduce: bool = True) -> torch.Tensor:
         """
         arguments:
             coords: (number of atoms, 3) atom coordinates
             atom_features: (number of atoms, atom_dim) atom type features
             edge_index: (2, E) edge connectivity
             t: (number of atoms, ) continuous diffusion time
+            batch_idx: (number of atoms, ) specifies each atom's origin
+                   (atoms belong to the same molecule has the same index)
+                   it is created automatically if PyG dataloader is used.
         returns:
-            scalar log p_theta(x,t) - outputs a scalar per atom
+            scalar log p_theta(x,t) - outputs a scalar per molecule in batch
         """
-        num_nodes = coords.size(0)
-        coords_features = self.pos_encoder(coords)
-        nodes = self.initializer(atom_features, t, num_nodes)
-        nodes = nodes + coords_features
+        nodes = self.initializer(coords, atom_features,t , batch_idx)
         if edge_index.numel() > 0:
             edges = compute_edge_features(coords, edge_index)
             for layer in self.layers:
                 nodes = layer(nodes, edges, edge_index)
-        logp = self.energy_head(nodes)
+        logp = self.energy_head(nodes, batch_idx, reduce)
         return logp
 
 class EnergyHead(nn.Module):
@@ -57,25 +56,12 @@ class EnergyHead(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, node_features: torch.Tensor) -> torch.Tensor:
-        """maps each node to a scalar energy"""
-        return self.mlp(node_features).squeeze(-1)  # (num_atoms,)
-
-
-class PositionalEncoding(nn.Module):
-    """encode 3d positions into high-dimensional features"""
-    def __init__(self, hidden_dim: int) -> None:
-        super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(3, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
-
-    def forward(self, coords: torch.Tensor) -> torch.Tensor:
-        return self.mlp(coords)
+    def forward(self, node_features: torch.Tensor, batch_idx: Optional[torch.Tensor] = None, reduce = True) -> torch.Tensor:
+        """maps each node to a scalar energy and optionally sums over the molecule(s)."""
+        node_energy = self.mlp(node_features).squeeze(-1)  # (num_atoms,)
+        if not reduce or batch_idx is None:
+            return node_energy
+        return scatter_add(node_energy, batch_idx, dim=0)
 
 
 class TimeEmbedding(nn.Module):
@@ -102,23 +88,6 @@ class TimeEmbedding(nn.Module):
         return self.mlp(t.unsqueeze(-1))
 
 
-class SinusoidalTimeEmbedding(nn.Module):
-    """sinusoidal time embedding"""
-    def __init__(self, embed_dim: int) -> None:
-        super().__init__()
-        self.embed_dim = embed_dim
-
-    def forward(self, t):
-        if t.dim() == 0:
-            t = t.unsqueeze(0)
-        half_dim = self.embed_dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
-        emb = t[:, None] * emb[None, :]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-        return emb
-
-
 class MultiHeadGraphTransformer(nn.Module):
     """
     multi-head attention-based message passing layer
@@ -127,7 +96,7 @@ class MultiHeadGraphTransformer(nn.Module):
     where:
         e_ij = [x_i - x_j, ||x_i - x_j||]
     """
-    def __init__(self, hidden_dim: int, edge_dim: int = 36, num_heads: int = 4, dropout: float = 0.1) -> None:
+    def __init__(self, hidden_dim: int, edge_dim: int = 33, num_heads: int = 4, dropout: float = 0.1) -> None:
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
         self.hidden_dim = hidden_dim
@@ -192,30 +161,25 @@ class NodeInitializer(nn.Module):
     def __init__(self, atom_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.atom_project = nn.Linear(atom_dim, hidden_dim)
-        #self.time_embed = SinusoidalTimeEmbedding(hidden_dim)
         self.time_embed = TimeEmbedding(hidden_dim)
+        self.coord_mlp = nn.Sequential(
+            nn.Linear(3, hidden_dim),
+            nn.SiLU(),
+        )
 
-    def forward(self, atom_features: torch.Tensor, t: torch.Tensor,
-                num_nodes: int, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, coords: torch.Tensor, atom_features: torch.Tensor, t: torch.Tensor, batch_idx: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         arguments:
             atom_features: (number of atoms, atom_dim)
             t: (number fo atoms, ) continuous time in range (0, 1)
-            num_nodes: int, number of nodes
             batch: (number of atoms, ) batch assignment (optional)
         returns:
             (number of atoms, hidden_dim) initialized node features
         """
-        h_atom = self.atom_project(atom_features)
-        time_emb = self.time_embed(t)
-        if batch is not None:
-            h_time = time_emb[batch]
-        else:
-            if time_emb.shape[0] == num_nodes:
-                h_time = time_emb
-            else:
-                h_time = time_emb.expand(num_nodes, -1)
-        return h_atom + h_time
+        h = self.atom_project(atom_features)
+        h = h + self.coord_mlp(coords)
+        h = h + self.time_embed(t)
+        return h
 
 
 def compute_edge_features(coords: torch.Tensor, edge_index: torch.Tensor, num_rbf: int = 32, cutoff: float = 5.0) -> torch.Tensor:
@@ -242,5 +206,6 @@ def compute_edge_features(coords: torch.Tensor, edge_index: torch.Tensor, num_rb
     centers = torch.linspace(0.0, cutoff, num_rbf, device=coords.device)
     width = centers[1] - centers[0]
     rbf = torch.exp(-((distance - centers) ** 2) / (2 * width ** 2))  # (E, num_rbf)
-    edge_features = torch.cat([relative_pos, distance, rbf], dim=-1)
+    edge_features = torch.cat([distance, rbf], dim=-1)
+    #edge_features = torch.cat([relative_pos, distance, rbf], dim=-1)
     return edge_features

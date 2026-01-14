@@ -1,13 +1,31 @@
 import torch
+from torch_scatter import scatter_mean
+
+def dsm_loss(pred: torch.Tensor, target: torch.Tensor, batch_idx: torch.Tensor, *args) -> torch.Tensor:
+    """
+    pred, target: (num_atoms, 3)
+    batch_idx: (num_atoms,)
+    """
+    # per-atom squared error
+    atom_loss = ((pred - target) ** 2).sum(dim=-1)  # (num_atoms,)
+    # average within each molecule
+    mol_loss = scatter_mean(atom_loss, batch_idx, dim=0)  # (num_molecules,)
+    # average over molecules
+    return mol_loss.mean()
+
+
+def distillation_loss(pred: torch.Tensor, target: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tensor:
+    atom_loss = ((pred - target) ** 2).sum(dim=-1)
+    mol_loss = scatter_mean(atom_loss, batch_idx, dim=0)
+    return mol_loss.mean()
+
+
 
 
 def mse_loss(pred: torch.Tensor, target: torch.Tensor, *args) -> torch.Tensor:
     return ((pred - target) ** 2).mean()
 
-def dsm_loss(pred_score: torch.Tensor, true_score: torch.Tensor, *args) -> torch.Tensor:
-    """standard dsm loss for vp-sde diffusion models"""
-    se = ((pred_score - true_score)**2).mean(dim=-1)
-    return se.mean()
+
 
 def snr_weighted_loss(pred_noise: torch.Tensor, target_noise: torch.Tensor,
                       variance: torch.Tensor, batch_idx: torch.Tensor, *args) -> torch.Tensor:

@@ -150,6 +150,8 @@ class TeacherTrainer(nn.Module):
     def train_step(self, x0: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                    batch_idx: torch.Tensor, num_molecules: int):
         noise = torch.randn_like(x0)
+        x0 = x0.clone()
+        noise = noise.clone()
         # random rotations during training so that the network
         # learns rotational equivariance via data augmentation
         if self.rotation_augment:
@@ -165,9 +167,9 @@ class TeacherTrainer(nn.Module):
         lambda_val = self.lambda_t(t_atom.mean())
         xt, true_score = self.forward_vp(x0, noise, t_atom)
         xt = xt.detach().requires_grad_(True)
-        logp = self.energy_net(xt, atom_features, edge_index, t_atom)
+        logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
         pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs) # derive score form energy and then convert it to noise
-        dsm_loss = lambda_val * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
+        dsm_loss = lambda_val * self.dsm_loss(pred_noise, noise, batch_idx) # weighted dsm-loss
         fp_loss = torch.tensor(0.0, device=self.device)
         fp_mask = self.fp_gate(x0, t_atom, self.forward_vp.vs, self.k, self.t_max)
         if fp_mask.any():
@@ -186,7 +188,8 @@ class TeacherTrainer(nn.Module):
             )
             var = self.forward_vp.vs.get_variance(t_active)
             fp_lambda_val = self.lambda_t(t_active.mean())
-            fp_loss = fp_lambda_val * self.fp_loss(r1, r2, var, alpha=self.fp_alpha) # weighted fp-loss
+            fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, alpha=self.fp_alpha) # weighted fp-loss
+            #fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, variance=var, alpha=self.fp_alpha)
         total_loss = (dsm_loss + fp_loss) / self.grad_acc
         fp_loss = fp_loss / self.grad_acc
         dsm_loss = dsm_loss / self.grad_acc
@@ -209,9 +212,9 @@ class TeacherTrainer(nn.Module):
             xt, true_score = self.forward_vp(x0, noise, t_atom)
             with self.freeze_params(self.energy_net):
                 xt = xt.detach().requires_grad_(True)
-                logp = self.energy_net(xt, atom_features, edge_index, t_atom)
+                logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
                 pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
-                loss = lambda_val * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
+                loss = lambda_val * self.dsm_loss(pred_noise, noise, batch_idx) # weighted dsm-loss
                 val_losses.append(loss.item())
         self.energy_net.train()
         return sum(val_losses) / len(val_losses)

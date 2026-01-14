@@ -23,11 +23,10 @@ def heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     # x ± v
     x_plus = (x + v).requires_grad_(True)
     x_minus = (x - v).requires_grad_(True)
+
     # log p_t^θ(x ± v)
-    #logp_p = energy_net(x_plus, atom_features, edge_index, t, batch_idx)
-    #logp_m = energy_net(x_minus, atom_features, edge_index, t, batch_idx)
-    logp_p = energy_net(x_plus, atom_features, edge_index, t)
-    logp_m = energy_net(x_minus, atom_features, edge_index, t)
+    logp_p = energy_net(x_plus, atom_features, edge_index, t, batch_idx, reduce = False)
+    logp_m = energy_net(x_minus, atom_features, edge_index, t, batch_idx, reduce = False)
     # s^θ(x ± v) = ∇_x log p_t^θ(x ± v)
     score_plus = score_from_energy(logp_p, x_plus)
     score_minus = score_from_energy(logp_m, x_minus)
@@ -46,18 +45,17 @@ def heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     x_ = x_plus.detach().requires_grad_(True)
     t_p = torch.clamp(t + h_s, 0.0, 1.0)
     t_m = torch.clamp(t - h_d, 0.0, 1.0)
-    #logp_t_p = energy_net(x_, atom_features, edge_index, t_p, batch_idx, False)
-    #logp_t = energy_net(x_, atom_features, edge_index, t, batch_idx, False)
-    #logp_t_m = energy_net(x_, atom_features, edge_index, t_m, batch_idx, False)
-    logp_t_p = energy_net(x_, atom_features, edge_index, t_p)
-    logp_t = energy_net(x_, atom_features, edge_index, t)
-    logp_t_m = energy_net(x_, atom_features, edge_index, t_m)
+
+    logp_t_p = energy_net(x_, atom_features, edge_index, t_p, batch_idx, reduce = True)
+    logp_t = energy_net(x_, atom_features, edge_index, t, batch_idx, reduce = True)
+    logp_t_m = energy_net(x_, atom_features, edge_index, t_m, batch_idx, reduce = True)
     # numerator
     num = (h_d ** 2 * logp_t_p + (h_d ** 2 - h_s ** 2) * logp_t - h_s ** 2 * logp_t_m)
     # denominator
     den = h_s * h_d * (h_s + h_d)
     # ∂_t log p_t^θ(x)
-    dlogp_dt = num / den
+    dlogp_dt_mol = num / den # per molecule
+    dlogp_dt = dlogp_dt_mol[batch_idx] # per atom
     # final weak FP residual
     r = (0.5 * beta_t * (div_s + s_sq) - drift - div_drift - dlogp_dt)
     return r
@@ -79,13 +77,12 @@ def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     beta_t_exp = beta_t.unsqueeze(-1)
     x = x.requires_grad_(True)
     #logp = energy_net(x, atom_features, edge_index, t, batch_idx)
-    logp = energy_net(x, atom_features, edge_index, t)
-    score = torch.autograd.grad(
-        logp.sum(), x, create_graph=True, retain_graph=True
-    )[0]
+    logp = energy_net(x, atom_features, edge_index, t, batch_idx)
+    score = score_from_energy(logp, x)
     # hutchinson divergence estimator: div s(x)
     eps = torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=gen)
     #eps = torch.randn_like(x)
+
     # rademacher noise
     #eps = torch.randint(0, 2, x.shape, device=x.device) * 2 - 1
 
@@ -108,15 +105,18 @@ def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     x_detached = x.detach().requires_grad_(True)
     t_p = torch.clamp(t + h_s, 0.0, 1.0)
     t_m = torch.clamp(t - h_d, 0.0, 1.0)
+
     #logp_p = energy_net(x_detached, atom_features, edge_index, t_p, batch_idx, False)
     #logp_0 = energy_net(x_detached, atom_features, edge_index, t, batch_idx, False)
     #logp_m = energy_net(x_detached, atom_features, edge_index, t_m, batch_idx, False)
-    logp_p = energy_net(x_detached, atom_features, edge_index, t_p)
-    logp_0 = energy_net(x_detached, atom_features, edge_index, t)
-    logp_m = energy_net(x_detached, atom_features, edge_index, t_m)
+
+    logp_p = energy_net(x_detached, atom_features, edge_index, t_p, batch_idx)
+    logp_0 = energy_net(x_detached, atom_features, edge_index, t, batch_idx)
+    logp_m = energy_net(x_detached, atom_features, edge_index, t_m, batch_idx)
     num = h_d**2 * logp_p + (h_d**2 - h_s**2) * logp_0 - h_s**2 * logp_m
     den = h_s * h_d * (h_s + h_d)
-    dlogp_dt = num / den
+    dlogp_dt_mol = num / den  # per molecule
+    dlogp_dt = dlogp_dt_mol[batch_idx]  # per atom
     # final fp residual
     r = (0.5 * beta_t * (div_s + s_sq) - drift - div_drift - dlogp_dt)
     return r

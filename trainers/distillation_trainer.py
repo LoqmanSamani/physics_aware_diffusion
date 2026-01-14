@@ -164,6 +164,8 @@ class DistTrainer(nn.Module):
         # sample time and generate x_t using forward diffusion
         # ------------------------------------------------------------
         noise = torch.randn_like(x0)
+        x0 = x0.clone()
+        noise = noise.clone()
         # random rotations during training so that the network
         # learns rotational equivariance via data augmentation
         if self.rotation_augment:
@@ -186,7 +188,7 @@ class DistTrainer(nn.Module):
         # we use freeze-prams function which freezes only teacher score net
         with self.freeze_params(self.t_energy_net):
             xt1 = xt.clone().requires_grad_(True)
-            logp_t = self.t_energy_net(xt1, atom_features, edge_index, t_atom)
+            logp_t = self.t_energy_net(xt1, atom_features, edge_index, t_atom, batch_idx)
             t_score_t = self.score_fn(logp_t, xt1)
             # t -> 0 should be properly handled this way
             dt_small = torch.minimum(torch.full_like(t_atom, self.dt.item()), t_atom - self.t_min)
@@ -198,7 +200,7 @@ class DistTrainer(nn.Module):
             xt_2dt = xt_dt.clone()
             valid_mask_2 = t_atom_2 > self.t_min
             xt_dt = xt_dt.detach().requires_grad_(True)
-            logp_t2 = self.t_energy_net(xt_dt, atom_features, edge_index, t_atom_2)
+            logp_t2 = self.t_energy_net(xt_dt, atom_features, edge_index, t_atom_2, batch_idx)
             t_score_t2 = self.score_fn(logp_t2, xt_dt)
             if valid_mask_2.any():
                 dt_small_2 = torch.minimum(torch.full_like(t_atom_2[valid_mask_2], self.dt.item()), t_atom_2[valid_mask_2] - self.t_min)
@@ -210,7 +212,7 @@ class DistTrainer(nn.Module):
         # one large reverse step (2 * dt) using student model
         # ------------------------------------------------------------
         xt_st = xt.clone().requires_grad_(True)
-        logp_st = self.energy_net(xt_st, atom_features, edge_index, t_atom)
+        logp_st = self.energy_net(xt_st, atom_features, edge_index, t_atom, batch_idx)
         st_score = self.score_fn(logp_st, xt_st)
         valid_mask_st = t_atom > self.t_min
         xt_st_2dt = xt_st.clone()
@@ -224,7 +226,7 @@ class DistTrainer(nn.Module):
 
         # distillation loss
         # ------------------------------------------------------------
-        dist_loss = lambda_val * self.dist_loss(xt_st_2dt, xt_2dt.detach())
+        dist_loss = lambda_val * self.dist_loss(xt_st_2dt, xt_2dt.detach(), batch_idx)
 
         # fp-regularization only on student
         # ------------------------------------------------------------
@@ -246,7 +248,8 @@ class DistTrainer(nn.Module):
             )
             var = self.forward_vp.vs.get_variance(t_active)
             fp_lambda_val = self.lambda_t(t_active.mean())
-            fp_loss = fp_lambda_val * self.fp_loss(r1, r2, var, alpha=self.fp_alpha)
+            fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, alpha=self.fp_alpha)  # weighted fp-loss
+            # fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, variance=var, alpha=self.fp_alpha)
 
         total_loss = (dist_loss + fp_loss) / self.grad_acc
         return total_loss, dist_loss / self.grad_acc, fp_loss / self.grad_acc
@@ -269,7 +272,7 @@ class DistTrainer(nn.Module):
             # freeze both teacher and student energy nets
             with self.freeze_params(self.t_energy_net):
                 xt1 = xt.clone().requires_grad_(True)
-                logp_t = self.t_energy_net(xt1, atom_features, edge_index, t_atom)
+                logp_t = self.t_energy_net(xt1, atom_features, edge_index, t_atom, batch_idx)
                 t_score_t = self.score_fn(logp_t, xt1)
                 dt_small = torch.minimum(torch.full_like(t_atom, self.dt.item()), t_atom - self.t_min)
                 noise1 = torch.randn_like(xt1)
@@ -279,7 +282,7 @@ class DistTrainer(nn.Module):
                 xt_2dt = xt_dt.clone()
                 valid_mask_2 = t_atom_2 > self.t_min
                 xt_dt = xt_dt.detach().requires_grad_(True)
-                logp_t2 = self.t_energy_net(xt_dt, atom_features, edge_index, t_atom_2)
+                logp_t2 = self.t_energy_net(xt_dt, atom_features, edge_index, t_atom_2, batch_idx)
                 t_score_t2 = self.score_fn(logp_t2, xt_dt)
                 if valid_mask_2.any():
                     dt_small_2 = torch.minimum(
@@ -291,7 +294,7 @@ class DistTrainer(nn.Module):
                     )
                 with self.freeze_params(self.energy_net):
                     xt_st = xt.clone().requires_grad_(True)
-                    logp_st = self.energy_net(xt_st, atom_features, edge_index, t_atom)
+                    logp_st = self.energy_net(xt_st, atom_features, edge_index, t_atom, batch_idx)
                     st_score = self.score_fn(logp_st, xt_st)
                     valid_mask_st = t_atom > self.t_min
                     xt_st_2dt = xt_st.clone()
@@ -302,7 +305,7 @@ class DistTrainer(nn.Module):
                         xt_st_2dt[valid_mask_st] = self.reverse_vp(
                             xt_st[valid_mask_st], st_score[valid_mask_st], t_atom[valid_mask_st], dt_eff, mode="ode"
                         )
-                    dist_loss = lambda_val * self.dist_loss(xt_st_2dt, xt_2dt.detach())
+                    dist_loss = lambda_val * self.dist_loss(xt_st_2dt, xt_2dt.detach(), batch_idx)
                     val_losses.append(dist_loss.item())
         self.energy_net.train()
         return sum(val_losses) / len(val_losses)

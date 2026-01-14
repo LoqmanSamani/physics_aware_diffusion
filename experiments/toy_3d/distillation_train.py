@@ -5,7 +5,7 @@ from score_nets.energy_net import GraphEnergyNet
 from diffusion.forward import ForwardVP
 from diffusion.reverse import ReverseVP
 from diffusion.schedules import LinearVS
-from losses.dsm_losses import mse_loss, dsm_loss
+from losses.dsm_losses import distillation_loss
 from losses.fp_losses import snr_fokker_planck_loss, fokker_planck_loss
 from physics.fp_residuals import heavy_fp_residual, light_fp_residual
 from physics.derive_score import score_from_energy
@@ -64,7 +64,7 @@ t_energy_net = GraphEnergyNet(
     atom_dim= cfg['model']['atom_dim'],
     hidden_dim=128, #cfg['model']['hidden_dim'],
     num_layers=4, #cfg['model']['num_layers'],
-    edge_dim = 36,
+    edge_dim = 33,
     num_heads=2,
     dropout=cfg['model']['dropout'],
 )
@@ -73,7 +73,7 @@ energy_net = GraphEnergyNet(
     atom_dim= cfg['model']['atom_dim'],
     hidden_dim=128, #cfg['model']['hidden_dim'],
     num_layers=4, #cfg['model']['num_layers'],
-    edge_dim = 36,
+    edge_dim = 33,
     num_heads=2,
     dropout=cfg['model']['dropout'],
 )
@@ -95,8 +95,8 @@ trainer = DistTrainer(
     data_loader = dataloader,
     optimizer = optim,
     fp_gate = fp_gate_,
-    fp_loss = snr_fokker_planck_loss,
-    dist_loss = mse_loss,
+    fp_loss = fokker_planck_loss,
+    dist_loss = distillation_loss,
     score_fn = score_from_energy,
     fp_residual = heavy_fp_residual,
     val_loader = val_loader,

@@ -60,7 +60,7 @@ energy_net = GraphEnergyNet(
     atom_dim= cfg['model']['atom_dim'],
     hidden_dim=128, #cfg['model']['hidden_dim'],
     num_layers=4, #cfg['model']['num_layers'],
-    edge_dim = 36,
+    edge_dim = 33,
     num_heads=2,
     dropout=cfg['model']['dropout'],
 )
@@ -68,7 +68,7 @@ print(sum(p.numel() for p in energy_net.parameters()))
 
 optim = torch.optim.AdamW(
     energy_net.parameters(),
-    lr=1e-5, #cfg['training']['learning_rate'],
+    lr=1e-4, #cfg['training']['learning_rate'],
     weight_decay=cfg['training']['weight_decay'],
     betas=cfg['training']['betas']
 )
@@ -79,8 +79,8 @@ trainer = TeacherTrainer(
     data_loader = dataloader,
     optimizer = optim,
     fp_gate = fp_gate_,
-    fp_loss = snr_fokker_planck_loss,
-    dsm_loss = mse_loss,
+    fp_loss = fokker_planck_loss,
+    dsm_loss = dsm_loss,
     noise_fn = noise_from_energy,
     fp_residual = heavy_fp_residual,
     val_loader = val_loader,
@@ -93,7 +93,8 @@ trainer = TeacherTrainer(
     warmup_steps = 400,
     rotation_augment = True,
     k = 1.0,
-    t_max = 0.4
+    t_max = 0.5,
+    fp_alpha = 5e-4
 )
 
 losses = trainer()
