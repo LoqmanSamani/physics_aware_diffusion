@@ -19,18 +19,17 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 project_root = Path(__file__).parent.parent.parent
-config_path = project_root / "configs" / "mnist_vp_sde.yaml"
+config_path = "/home/loqman/Downloads/projs/physics_aware_diffusion/configs/mnist_vp_sde.yaml"
 cfg = load_config(str(config_path))
 set_seed(cfg["experiment"]["seed"])
 
 vs = LinearVS(
     beta_start=cfg["diffusion"]["beta_start"],
-    beta_end=cfg["diffusion"]["beta_end"],
-    min_variance = cfg['diffusion']['min_variance']
+    beta_end=cfg["diffusion"]["beta_end"]
 ).to(cfg["experiment"]["device"])
 
 forward_vp = ForwardVP(vs).to(cfg["experiment"]["device"])
-#checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/mnist/vp_best.pth", map_location="cpu")
+#checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/toy_2d/mnist/vp_epoch_70.pth", map_location="cpu")
 score_net = TinyUNet(
     in_channels=cfg["dataset"]["channels"],
     base_channels=cfg["model"]["base_channels"],
@@ -48,10 +47,10 @@ data_loader = get_mnist_subset_dataloader(
     subset_fraction=cfg["dataset"]["subset_fraction"],
 )
 
-checkpoint = torch.load("/experiments/toy_2d/mnist/vp_best.pth", map_location="cpu")
-score_net.load_state_dict(checkpoint["score_net_state"])
-optimizer.load_state_dict(checkpoint["optimizer_state"])
-vs.load_state_dict(checkpoint["scheduler"])
+#checkpoint = torch.load("/experiments/toy_2d/mnist/vp_best.pth", map_location="cpu")
+#score_net.load_state_dict(checkpoint["score_net_state"])
+#optimizer.load_state_dict(checkpoint["optimizer_state"])
+#vs.load_state_dict(checkpoint["scheduler"])
 
 
 trainer = MNISTTrainer(

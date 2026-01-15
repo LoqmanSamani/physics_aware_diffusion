@@ -1,25 +1,27 @@
 import torch
 import torch.nn as nn
-from diffusion.reverse import ReverseVP
+from diffusion.reverse import ReverseVP, ReverseDDPM, ReverseDDPMSimplified
 from score_nets.tiny_unet import TinyUNet
-from samplers.mnist_sampler import MNISTSampler
+from samplers.mnist_samplers import MNISTSampler, MNISTSamplerDDPM
 from diffusion.schedules import LinearVS
 from configs.load_config import load_config
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent.parent
-config_path = project_root / "configs" / "mnist_vp_sde.yaml"
+config_path = "/home/loqman/Downloads/projs/physics_aware_diffusion/configs/mnist_vp_sde.yaml"
 cfg = load_config(str(config_path))
 
 
 vs = LinearVS(
     beta_start=cfg["diffusion"]["beta_start"],
-    beta_end=cfg["diffusion"]["beta_end"],
-    min_variance=cfg['diffusion']['min_variance']
+    beta_end=cfg["diffusion"]["beta_end"]
 ).to("cuda")
 
 reverse_vp = ReverseVP(vs).to("cuda")
-checkpoint = torch.load("/experiments/toy_2d/mnist/vp_best.pth", map_location="cpu")
+reverse_vp_ddpm = ReverseDDPM(vs).to("cuda")
+reverse_vp_ddpm_s = ReverseDDPMSimplified(vs).to("cuda")
+
+checkpoint = torch.load("/home/loqman/Downloads/projs/physics_aware_diffusion/experiments/toy_2d/mnist/vp_best.pth", map_location="cpu")
 score_net = TinyUNet(
     in_channels=cfg["dataset"]["channels"],
     base_channels=cfg["model"]["base_channels"],
@@ -36,6 +38,16 @@ sampler = MNISTSampler(
     in_channels=1,
     device='cuda'
 )
-sampler(1000, "../mnist/results1")
+#sampler(num_steps = 1000, store_path = "../mnist/results1", mode = 'sde', normalize = True)
 
+ddpm_sampler = MNISTSamplerDDPM(
+    score_net = score_net,
+    reverse_ddpm = reverse_vp_ddpm_s, # reverse_vp_ddpm
+    output_size = (28, 28),
+    batch_size = 50,
+    in_channels = 1,
+    device = "cuda",
+    eps =  1e-3
+)
 
+x0 = ddpm_sampler(1000, "../mnist/results", False)

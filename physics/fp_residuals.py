@@ -35,22 +35,23 @@ def heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     div_s = ((v / sigma) * (score_plus - score_minus) / (2.0 * sigma)).sum(dim=-1)
     # || s^θ(x+v,t) ||^2
     s_sq = (score_plus ** 2).sum(dim=-1)
-    # drift f(x,t) = -½ β_t x
+    # drift f(x+v,t) = -½ β_t x
     drift_vec = -0.5 * beta_t_exp * x_plus
-    # ⟨ f(x,t), s^θ(x,t) ⟩
+    # ⟨ f(x+v,t), s^θ(x+v,t) ⟩
     drift = (drift_vec * score_plus).sum(dim=-1)
-    # div f(x,t) = -½ β_t d
+    # div f(x+v,t) = -½ β_t d
     div_drift = -0.5 * beta_t * dim
     # finite-difference estimator of ∂_t log p_t^θ(x)
-    x_ = x_plus.detach().requires_grad_(True)
-    t_p = torch.clamp(t + h_s, 0.0, 1.0)
-    t_m = torch.clamp(t - h_d, 0.0, 1.0)
+    x_ = x.detach().requires_grad_(True)
+    t_p = torch.clamp(t + h_d, 0.0, 1.0)
+    t_m = torch.clamp(t - h_s, 0.0, 1.0)
 
     logp_t_p = energy_net(x_, atom_features, edge_index, t_p, batch_idx, reduce = True)
     logp_t = energy_net(x_, atom_features, edge_index, t, batch_idx, reduce = True)
     logp_t_m = energy_net(x_, atom_features, edge_index, t_m, batch_idx, reduce = True)
+
     # numerator
-    num = (h_d ** 2 * logp_t_p + (h_d ** 2 - h_s ** 2) * logp_t - h_s ** 2 * logp_t_m)
+    num = (h_s ** 2 * logp_t_p + (h_d ** 2 - h_s ** 2) * logp_t - h_d ** 2 * logp_t_m)
     # denominator
     den = h_s * h_d * (h_s + h_d)
     # ∂_t log p_t^θ(x)
@@ -59,6 +60,7 @@ def heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     # final weak FP residual
     r = (0.5 * beta_t * (div_s + s_sq) - drift - div_drift - dlogp_dt)
     return r
+
 
 
 def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: torch.Tensor,
@@ -76,18 +78,15 @@ def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     beta_t = scheduler.get_variance(t)
     beta_t_exp = beta_t.unsqueeze(-1)
     x = x.requires_grad_(True)
-    #logp = energy_net(x, atom_features, edge_index, t, batch_idx)
-    logp = energy_net(x, atom_features, edge_index, t, batch_idx)
+    logp = energy_net(x, atom_features, edge_index, t, batch_idx, reduce = False)
     score = score_from_energy(logp, x)
     # hutchinson divergence estimator: div s(x)
     eps = torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=gen)
     #eps = torch.randn_like(x)
 
-    # rademacher noise
-    #eps = torch.randint(0, 2, x.shape, device=x.device) * 2 - 1
-
     # g(x) = s(x) · eps
-    score_eps = (score * eps).sum()
+    #score_eps = (score * eps).sum()
+    score_eps = (score * eps).sum(dim=-1).sum()
     # ∇_x (s(x) · eps)
     grad_score_eps = torch.autograd.grad(
         score_eps, x, create_graph=True, retain_graph=True
@@ -102,19 +101,17 @@ def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     # div f(x,t) = -½ β_t d
     div_drift = -0.5 * beta_t * dim
     # ∂_t log p_t(x) via finite differences
-    x_detached = x.detach().requires_grad_(True)
-    t_p = torch.clamp(t + h_s, 0.0, 1.0)
-    t_m = torch.clamp(t - h_d, 0.0, 1.0)
+    x_ = x.detach().requires_grad_(True)
+    t_p = torch.clamp(t + h_d, 0.0, 1.0)
+    t_m = torch.clamp(t - h_s, 0.0, 1.0)
 
-    #logp_p = energy_net(x_detached, atom_features, edge_index, t_p, batch_idx, False)
-    #logp_0 = energy_net(x_detached, atom_features, edge_index, t, batch_idx, False)
-    #logp_m = energy_net(x_detached, atom_features, edge_index, t_m, batch_idx, False)
+    logp_t_p = energy_net(x_, atom_features, edge_index, t_p, batch_idx, reduce = True)
+    logp_t = energy_net(x_, atom_features, edge_index, t, batch_idx, reduce = True)
+    logp_t_m = energy_net(x_, atom_features, edge_index, t_m, batch_idx, reduce = True)
 
-    logp_p = energy_net(x_detached, atom_features, edge_index, t_p, batch_idx)
-    logp_0 = energy_net(x_detached, atom_features, edge_index, t, batch_idx)
-    logp_m = energy_net(x_detached, atom_features, edge_index, t_m, batch_idx)
-    num = h_d**2 * logp_p + (h_d**2 - h_s**2) * logp_0 - h_s**2 * logp_m
+    num = (h_s ** 2 * logp_t_p + (h_d ** 2 - h_s ** 2) * logp_t - h_d ** 2 * logp_t_m)
     den = h_s * h_d * (h_s + h_d)
+
     dlogp_dt_mol = num / den  # per molecule
     dlogp_dt = dlogp_dt_mol[batch_idx]  # per atom
     # final fp residual

@@ -53,19 +53,18 @@ class MNISTTrainer(nn.Module):
                 x0 = x0.to(self.device)
                 noise = torch.randn_like(x0)
                 time = self.sample_time(x0.shape[0])
-                variance = self.forward_vp.vs.get_variance(time)
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
                         xt, true_score = self.forward_vp(x0, noise, time)
                     with torch.amp.autocast('cuda', enabled=False):
-                        pred_score = self.score_net(xt, time)
+                        pred_noise = self.score_net(xt, time)
                     with torch.amp.autocast('cuda'):
-                        loss = self.loss_fn(pred_score, true_score, variance) / self.grad_acc
+                        loss = self.loss_fn(pred_noise, noise) / self.grad_acc
                     self.scaler.scale(loss).backward()
                 else:
                     xt, pred_score = self.forward_vp(x0, noise, time)
-                    pred_score = self.score_net(xt, time)
-                    loss = self.loss_fn(pred_score, true_score, variance) / self.grad_acc
+                    pred_noise = self.score_net(xt, time)
+                    loss = self.loss_fn(pred_noise, noise) / self.grad_acc
                     #print(loss.shape)
                     loss.backward()
                 if (step + 1) % self.grad_acc == 0:
@@ -116,9 +115,9 @@ class MNISTTrainer(nn.Module):
     def sample_time(self, batch_size: int, eps: float = 1e-3) -> torch.Tensor:
         """oversample middle timesteps where score is hardest"""
         # beta distribution concentrates sampling around t=0.5
-        t = torch.distributions.Beta(2.0, 2.0).sample((batch_size,)).to(self.device)
-        t = eps + (1.0 - 2 * eps) * t
-        return t
+        #t = torch.distributions.Beta(2.0, 2.0).sample((batch_size,)).to(self.device)
+        #t = eps + (1.0 - 2 * eps) * t
+        return torch.rand(batch_size, device=self.device)
 
     def _save_checkpoint(self, epoch: int, loss: float, train_losses: list, is_best: bool = False) -> None:
         checkpoint = {

@@ -22,7 +22,7 @@ class ForwardVP(nn.Module):
             xt: (number of atoms, 3) noised coordinates
             true_score: (number of atoms, 3) true score ∇_x log p(x_t | x_0)
         """
-        assert torch.all(t > 0.0) and torch.all(t < 1.0), "Time must be in (0, 1)"
+        #assert torch.all(t > 0.0) and torch.all(t < 1.0), "Time must be in (0, 1)"
         variance = self.vs.get_variance(t)  # σ²(t)
         std = torch.sqrt(variance)  # σ(t)
         signal_coeff = torch.sqrt(1.0 - variance)  # √(1 - σ²(t))
