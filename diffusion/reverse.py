@@ -5,70 +5,70 @@ from typing import Optional
 
 
 class ReverseVP(nn.Module):
+    """reverse diffusion process for vp-sde
+    reverse sde: dx = [f(x,t) - g²(t)∇_x log p_t(x)]dt + g(t)dw̄
     """
-    reverse-time dynamics for vp-sde with explicit mode switching
-    modes:
-        - 'sde' : stochastic reverse sde (teacher / sampling)
-        - 'ode' : deterministic probability flow ode (distillation / student)
-    """
-    def __init__(self, variance_scheduler: LinearVS, eps: float = 1e-5, default_mode: str = "sde"):
+    def __init__(self, variance_scheduler: LinearVS):
         super().__init__()
-        assert default_mode in ("sde", "ode")
         self.vs = variance_scheduler
-        self.eps = eps
-        self.default_mode = default_mode
 
-    def _broadcast_coeff(self, coeff: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        while coeff.dim() < x.dim():
-            coeff = coeff.unsqueeze(-1)
-        return coeff
-
-    def _reverse_sde_drift(self, x, score, t):
+    def forward(self, xt: torch.Tensor, score: torch.Tensor, t: torch.Tensor, dt,* ,last_step: bool = False) -> torch.Tensor:
+        """single reverse euler-maruyama step
+        arguments:
+            xt: (batch, ..., dims) current state
+            score: (batch, ..., dims) score estimate ∇_x log p_t(x)
+            t: (batch,) current time
+            dt: scalar time step (negative for reverse)
+        returns:
+            x_prev: (batch, ..., dims) previous state
         """
-        drift of reverse-time sde:
-        f(x,t) - g(t)^2 * score
-        """
-        beta_half = self.vs.get_drift_coeff(t)          # -½β(t)
-        g = self.vs.get_diffusion_coeff(t)              # √β(t)
-        beta_half = self._broadcast_coeff(beta_half, x)
-        g = self._broadcast_coeff(g, x)
-        return beta_half * x - (g ** 2) * score
-
-    def _reverse_ode_drift(self, x, score, t):
-        """
-        drift of probability flow ode:
-        f(x,t) - ½ g(t)^2 * score
-        """
-        beta_half = self.vs.get_drift_coeff(t)          # -½β(t)
-        g = self.vs.get_diffusion_coeff(t)
-        beta_half = self._broadcast_coeff(beta_half, x)
-        g = self._broadcast_coeff(g, x)
-        return beta_half * x - 0.5 * (g ** 2) * score
-
-    def forward(self, xt: torch.Tensor, score: torch.Tensor, t: torch.Tensor, dt,
-                *, noise: torch.Tensor = None, mode: str = None) -> torch.Tensor:
         if not torch.is_tensor(dt):
+            assert (dt < 0.0), "dt must be negative!"
             dt = torch.tensor(dt, device=xt.device, dtype=xt.dtype)
 
-        dt_abs = torch.abs(dt)
-        while dt_abs.dim() < xt.dim():
-            dt_abs = dt_abs.unsqueeze(-1)
+        f = self.vs.drift_coeff(t)  # -½β(t)
+        g = self.vs.diffusion_coeff(t)  # √β(t)
+        g_squared = self.vs.beta(t)  # β(t)
+        while f.dim() < xt.dim():
+            f = f.unsqueeze(-1)
+            g = g.unsqueeze(-1)
+            g_squared = g_squared.unsqueeze(-1)
+        # reverse drift: f(x,t) - g²(t)·score
+        drift = f * xt - g_squared * score
+        # diffusion term
+        if last_step:
+            noise = torch.zeros_like(xt)
+        else:
+            noise = torch.randn_like(xt)
+        diffusion = g * noise
+        # euler-maruyama step
+        x_prev = xt + drift * dt + diffusion * torch.sqrt(torch.abs(dt))
+        return x_prev
 
-        mode = mode or self.default_mode
-        assert mode in ("sde", "ode")
+    def probability_flow_ode(self, xt: torch.Tensor, score: torch.Tensor, t: torch.Tensor, dt) -> torch.Tensor:
+        """single ode step (deterministic sampling)
+           dx = [f(x,t) - ½g²(t)∇_x log p_t(x)]dt
+        arguments:
+            xt: (batch, ..., dims) current state
+            score: (batch, ..., dims) score estimate
+            t: (batch, ) current time
+            dt: scalar time step
+        returns:
+            x_prev: (batch, ..., dims) previous state
+        """
+        if not torch.is_tensor(dt):
+            dt = torch.tensor(dt, device=xt.device, dtype=xt.dtype)
+        f = self.vs.drift_coeff(t)
+        g_squared = self.vs.beta(t)
+        while f.dim() < xt.dim():
+            f = f.unsqueeze(-1)
+            g_squared = g_squared.unsqueeze(-1)
+        # ode drift
+        drift = f * xt - 0.5 * g_squared * score
+        # euler step
+        x_prev = xt + drift * dt
+        return x_prev
 
-        if mode == "sde":
-            if noise is None:
-                noise = torch.randn_like(xt)
-            drift = self._reverse_sde_drift(xt, score, t)
-            g = self.vs.get_diffusion_coeff(t)
-            g = self._broadcast_coeff(g, xt)
-            xt_prev = xt - drift * dt_abs + g * noise * torch.sqrt(dt_abs)
-        else:  # 'ode'
-            drift = self._reverse_ode_drift(xt, score, t)
-            xt_prev = xt - drift * dt_abs
-
-        return xt_prev
 
 
 
@@ -115,9 +115,9 @@ class ReverseDDPM(nn.Module):
         alpha_t = torch.sqrt(alpha_t_sq)  # √ᾱ_t
         alpha_prev_sq = self.vs.alpha_squared(t_prev)  # ᾱ_{t-1}
         alpha_prev = torch.sqrt(alpha_prev_sq)  # √ᾱ_{t-1}
-        sigma_t_sq = self.vs.get_variance(t)  # σ²_t = 1 - ᾱ_t
+        sigma_t_sq = self.vs.variance(t)  # σ²_t = 1 - ᾱ_t
         sigma_t = torch.sqrt(sigma_t_sq + self.eps)  # σ_t
-        sigma_prev_sq = self.vs.get_variance(t_prev)  # σ²_{t-1} = 1 - ᾱ_{t-1}
+        sigma_prev_sq = self.vs.variance(t_prev)  # σ²_{t-1} = 1 - ᾱ_{t-1}
         alpha_t = self._broadcast_coeff(alpha_t, xt)
         alpha_prev = self._broadcast_coeff(alpha_prev, xt)
         sigma_t = self._broadcast_coeff(sigma_t, xt)
@@ -184,8 +184,8 @@ class ReverseDDPMSimplified(nn.Module):
         """
         alpha_t = torch.sqrt(self.vs.alpha_squared(t))
         alpha_prev = torch.sqrt(self.vs.alpha_squared(t_prev))
-        sigma_t = self.vs.get_std(t)
-        sigma_prev = self.vs.get_std(t_prev)
+        sigma_t = self.vs.std(t)
+        sigma_prev = self.vs.std(t_prev)
         alpha_t = self._broadcast_coeff(alpha_t, xt)
         alpha_prev = self._broadcast_coeff(alpha_prev, xt)
         sigma_t = self._broadcast_coeff(sigma_t, xt)

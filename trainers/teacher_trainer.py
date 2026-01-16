@@ -37,6 +37,7 @@ class TeacherTrainer(nn.Module):
             lambda_t: Callable[[torch.Tensor], torch.Tensor] = lambda t: torch.exp(-t), # time-dependent weighting λ(t)
             k: float = 1.0,
             t_max: float =  0.5,
+            eps_time: float = 1e-5,
             *args
     ) -> None:
         super().__init__()
@@ -63,6 +64,7 @@ class TeacherTrainer(nn.Module):
         self.mix_precision = mix_precision
         self.k = k
         self.t_max = t_max
+        self.eps_time = eps_time
         self.global_step = 0
         self.base_lr = optimizer.param_groups[0]['lr']
         self.best_loss = float('inf')
@@ -70,7 +72,6 @@ class TeacherTrainer(nn.Module):
         self.scaler = GradScaler('cuda') if self.use_amp else None
         self.scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
         self.losses = {'total_losses': [], 'dsm_losses': [], 'fp_losses': [], 'val_losses': []}
-        self.t_min = self.forward_vp.eps
 
 
     def forward(self):
@@ -162,7 +163,7 @@ class TeacherTrainer(nn.Module):
                     mask = batch_idx == mol_idx
                     x0[mask] = x0[mask] @ R[mol_idx].T
                     noise[mask] = noise[mask] @ R[mol_idx].T
-        t_mol = self.sample_time(num_molecules, self.t_min) # (num_molecules,)
+        t_mol = self.sample_time(num_molecules, self.eps_time) # (num_molecules,)
         t_atom = t_mol[batch_idx] # (num_atoms,)
         lambda_val = self.lambda_t(t_atom.mean())
         xt, true_score = self.forward_vp(x0, noise, t_atom)
@@ -206,7 +207,7 @@ class TeacherTrainer(nn.Module):
             batch_idx = batch.batch.to(self.device)
             num_molecules = batch.num_graphs
             noise = torch.randn_like(x0)
-            t_mol = self.sample_time(num_molecules, self.t_min)  # (num_molecules,)
+            t_mol = self.sample_time(num_molecules, self.eps_time)  # (num_molecules,)
             t_atom = t_mol[batch_idx]  # (num_atoms,)
             lambda_val = self.lambda_t(t_atom.mean())
             xt, true_score = self.forward_vp(x0, noise, t_atom)

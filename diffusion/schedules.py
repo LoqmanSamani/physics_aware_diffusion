@@ -4,55 +4,57 @@ import numpy as np
 
 
 class LinearVS(nn.Module):
-    """linear variance schedule"""
+    """Linear variance schedule for VP-SDE
 
-    def __init__(self, beta_start=0.1, beta_end=20.0, min_variance=1e-5):
+    β(t) = β_min + t(β_max - β_min)
+    """
+
+    def __init__(self, beta_min: float = 0.1, beta_max: float = 20.0):
         super().__init__()
-        if not (0.0 < beta_start < beta_end):
-            raise ValueError("Require 0 < beta_start < beta_end")
-        self.beta_start = beta_start
-        self.beta_end = beta_end
-        self.min_variance = min_variance
+        if not (0.0 < beta_min < beta_max):
+            raise ValueError("Require 0 < beta_min < beta_max")
+        self.beta_min = beta_min
+        self.beta_max = beta_max
 
     def beta(self, t: torch.Tensor) -> torch.Tensor:
-        """β(t)"""
-        return self.beta_start + (self.beta_end - self.beta_start) * t
+        """β(t) = β_min + t(β_max - β_min)"""
+        return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def integral_beta(self, t: torch.Tensor) -> torch.Tensor:
-        """∫₀ᵗ β(s) ds"""
-        return self.beta_start * t + 0.5 * (self.beta_end - self.beta_start) * t ** 2
+        """∫₀ᵗ β(s) ds = β_min·t + ½(β_max - β_min)·t²"""
+        return self.beta_min * t + 0.5 * (self.beta_max - self.beta_min) * t ** 2
 
     def alpha(self, t: torch.Tensor) -> torch.Tensor:
-        """α(t) = exp(-∫₀ᵗ β(s) ds)"""
-        return torch.exp(-self.integral_beta(t))
+        """Mean coefficient: α(t) = exp(-½∫₀ᵗ β(s) ds)"""
+        return torch.exp(-0.5 * self.integral_beta(t))
 
     def alpha_squared(self, t: torch.Tensor) -> torch.Tensor:
-        """α²(t) = exp(-2∫₀ᵗ β(s) ds)"""
-        return torch.exp(-2.0 * self.integral_beta(t))
+        """α²(t) = exp(-∫₀ᵗ β(s) ds)"""
+        return torch.exp(-self.integral_beta(t))
 
-    def get_variance(self, t: torch.Tensor) -> torch.Tensor:
-        """σ²(t) = 1 - exp(-∫β), clipped to minimum value"""
-        variance = 1.0 - torch.exp(-self.integral_beta(t))
-        # return torch.clamp(variance, min=self.min_variance)
-        return variance
+    def variance(self, t: torch.Tensor) -> torch.Tensor:
+        """Variance: σ²(t) = 1 - α²(t)"""
+        return 1.0 - self.alpha_squared(t)
 
-    def get_std(self, t: torch.Tensor) -> torch.Tensor:
-        """σ(t) = √(σ²(t))"""
-        return torch.sqrt(self.get_variance(t))
+    def std(self, t: torch.Tensor) -> torch.Tensor:
+        """Standard deviation: σ(t) = √(1 - α²(t))"""
+        return torch.sqrt(self.variance(t))
 
     def snr(self, t: torch.Tensor) -> torch.Tensor:
         """Signal-to-noise ratio: SNR(t) = α²(t) / σ²(t)"""
         alpha_sq = self.alpha_squared(t)
-        variance = self.get_variance(t)
-        return alpha_sq / (variance + 1e-8)
+        var = self.variance(t)
+        return alpha_sq / (var + 1e-8)
 
-    def get_drift_coeff(self, t: torch.Tensor) -> torch.Tensor:
-        """-½ β(t)"""
+    def drift_coeff(self, t: torch.Tensor) -> torch.Tensor:
+        """Drift coefficient: f(x,t) = -½β(t)x
+        Returns: -½β(t)"""
         return -0.5 * self.beta(t)
 
-    def get_diffusion_coeff(self, t: torch.Tensor) -> torch.Tensor:
-        """√β(t)"""
+    def diffusion_coeff(self, t: torch.Tensor) -> torch.Tensor:
+        """Diffusion coefficient: g(t) = √β(t)"""
         return torch.sqrt(self.beta(t))
+
 
 
 class CosineVS(nn.Module):

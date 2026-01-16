@@ -12,16 +12,16 @@ class MNISTSampler(nn.Module):
     """sampler for variance preserving sde diffusion"""
     def __init__(self, score_net: nn.Module, variance_scheduler: LinearVS,
                  output_size: Tuple[int, int], batch_size: int, in_channels: int,
-                 device: str = "cuda", eps: float = 1e-3) -> None:
+                 device: str = "cuda", eps_time: float = 1e-5) -> None:
         super().__init__()
         self.device = device
         self.score_net = score_net.to(self.device)
         self.vs = variance_scheduler
-        self.reverse_vp = ReverseVP(variance_scheduler, eps=eps).to(self.device)
+        self.reverse_vp = ReverseVP(variance_scheduler).to(self.device)
         self.output_size = output_size
         self.batch_size = batch_size
         self.in_channels = in_channels
-        self.eps = eps
+        self.eps_time = eps_time
 
     def forward(self, num_steps: int, store_path: str, mode: str = "sde", normalize: bool = True) -> torch.Tensor:
         """
@@ -37,24 +37,27 @@ class MNISTSampler(nn.Module):
         self.score_net.eval()
         self.reverse_vp.eval()
 
-        t_schedule = torch.linspace(1.0, 0.0, num_steps + 1, device = self.device)
-        dt = 1.0 / num_steps
+        t_schedule = torch.linspace(1.0, self.eps_time, num_steps + 1, device = self.device)
+        dt = (-1.0 - self.eps_time) / num_steps
         iterator = tqdm(range(num_steps), desc="Sampling")
         with torch.no_grad():
             for step in iterator:
                 t_current = float(t_schedule[step])
                 t_batch = torch.full((self.batch_size,), t_current, dtype=torch.float32, device=self.device)
                 pred_noise = self.score_net(xt, t_batch).to(self.device)
-                std = self.vs.get_std(t_batch)
+                std = self.vs.std(t_batch)
                 while std.dim() < xt.dim():
                     std = std.unsqueeze(-1)
-                score = -pred_noise / std
-                if step < num_steps - 1:
-                    noise = torch.randn_like(xt).to(self.device)
-                else:
-                    noise = torch.zeros_like(xt).to(self.device)
+                score = -pred_noise / (std + 1e-8)
                 # take reverse sde step
-                xt = self.reverse_vp(xt, score, t_batch, dt, noise = noise, mode = mode)
+                if mode == "sde":
+                    if step == 0:
+                        xt = self.reverse_vp(xt, score, t_batch, dt, last_step = True)
+                    else:
+                        xt = self.reverse_vp(xt, score, t_batch, dt)
+                else:
+                    xt = self.reverse_vp.probability_flow_ode(xt, score, t_batch, dt)
+
                 # xt = torch.clamp(xt, min=-3.0, max=3.0)
         if normalize:
             x0 = torch.clamp(xt, min=-1.0, max=1.0)
@@ -95,7 +98,7 @@ class MNISTSamplerDDPM(nn.Module):
         ).to(self.device)
         self.score_net.eval()
 
-        t_schedule = torch.linspace(1.0 - self.eps, self.eps, num_steps + 1, device=self.device)
+        t_schedule = torch.linspace(1.0, self.eps, num_steps + 1, device=self.device)
 
         iterator = tqdm(range(num_steps), desc="DDPM Sampling")
         with torch.no_grad():

@@ -112,12 +112,8 @@ class MNISTTrainer(nn.Module):
                 self._save_checkpoint(epoch + 1, mean_train_loss, train_losses, is_best=True)
         return train_losses
 
-    def sample_time(self, batch_size: int, eps: float = 1e-3) -> torch.Tensor:
-        """oversample middle timesteps where score is hardest"""
-        # beta distribution concentrates sampling around t=0.5
-        #t = torch.distributions.Beta(2.0, 2.0).sample((batch_size,)).to(self.device)
-        #t = eps + (1.0 - 2 * eps) * t
-        return torch.rand(batch_size, device=self.device)
+    def sample_time(self, batch_size: int, eps: float = 1e-5) -> torch.Tensor:
+        return eps + (1 - eps) * torch.rand(batch_size, device=self.device)
 
     def _save_checkpoint(self, epoch: int, loss: float, train_losses: list, is_best: bool = False) -> None:
         checkpoint = {

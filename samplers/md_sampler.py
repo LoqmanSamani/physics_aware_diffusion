@@ -11,12 +11,13 @@ class MDSampler:
     sampling methods for energy-based diffusion models
     supports both iid sampling (denoising) and md simulation
     """
-    def __init__(self, energy_net: nn.Module, reverse_vp: nn.Module, score_fn: Callable,
+    def __init__(self, energy_net: nn.Module, reverse_vp: nn.Module, score_fn: Callable, eps_time: float = 1e-5,
                  store_path: str = "./samples", device: torch.device | None = None):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.energy_net = energy_net.to(self.device)
         self.reverse_vp = reverse_vp.to(self.device)
         self.score_fn = score_fn # derive score from energy (output of energy-net)
+        self.eps_time = eps_time
         self.store_path = store_path
 
     def sample_iid(self, atom_features: torch.Tensor, edge_index: torch.Tensor,
@@ -53,9 +54,9 @@ class MDSampler:
         edge_index_batched = torch.cat(edge_index_batch, dim=1) # (2, num_edges * num_samples)
         if store_trajectory:
             results["trajectory"].append(xt.clone())
-        num_steps = int((1.0 - self.reverse_vp.eps) / dt)
+        num_steps = int((1.0 - self.eps_time) / dt)
         assert num_steps > 0, "num_steps must be positive"
-        t_schedule = torch.linspace(1.0, self.reverse_vp.eps, num_steps + 1)
+        t_schedule = torch.linspace(1.0, self.eps_time, num_steps + 1)
         dt = torch.tensor(dt, device=xt.device, dtype=xt.dtype)
         iterator = tqdm(range(num_steps), desc="Sampling")
         # freeze energy network parameters
@@ -74,12 +75,14 @@ class MDSampler:
                 logp = self.energy_net(xt_flat, af_flat, edge_index_batched, t_atom)
                 score = self.score_fn(logp, xt_flat) # score = ∇_x log p(x|t)
                 assert score.shape == xt_flat.shape, "score shape mismatch"
-                if step < num_steps - 1:
-                    noise = torch.randn_like(xt_flat)
-                else:
-                    noise = torch.zeros_like(xt_flat) # no noise at final step
                 # take reverse sde or ode step
-                xt_flat = self.reverse_vp(xt_flat, score, t_atom, dt, noise=noise, mode=sampling_mode)
+                if sampling_mode == "sde":
+                    if step == 0:
+                        xt_flat = self.reverse_vp(xt_flat, score, t_atom, dt, last_step = True)
+                    else:
+                        xt_flat = self.reverse_vp(xt_flat, score, t_atom, dt)
+                else:
+                    xt_flat = self.reverse_vp.probability_flow_ode(xt_flat, score, t_atom, dt)
                 xt = xt_flat.view(num_samples, num_atoms, 3)
                 xt = xt.detach()
                 if store_trajectory:

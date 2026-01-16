@@ -13,8 +13,8 @@ cfg = load_config(str(config_path))
 
 
 vs = LinearVS(
-    beta_start=cfg["diffusion"]["beta_start"],
-    beta_end=cfg["diffusion"]["beta_end"]
+    beta_min=cfg["diffusion"]["beta_min"],
+    beta_max=cfg["diffusion"]["beta_max"]
 ).to("cuda")
 
 reverse_vp = ReverseVP(vs).to("cuda")
@@ -38,7 +38,8 @@ sampler = MNISTSampler(
     in_channels=1,
     device='cuda'
 )
-#sampler(num_steps = 1000, store_path = "../mnist/results1", mode = 'sde', normalize = True)
+sampler(num_steps = 1000, store_path = "../mnist/results1", mode = 'sde', normalize = True)
+
 
 ddpm_sampler = MNISTSamplerDDPM(
     score_net = score_net,
@@ -47,7 +48,7 @@ ddpm_sampler = MNISTSamplerDDPM(
     batch_size = 50,
     in_channels = 1,
     device = "cuda",
-    eps =  1e-3
+    eps =  1e-5
 )
 
-x0 = ddpm_sampler(1000, "../mnist/results", False)
+x0 = ddpm_sampler(1000, "../mnist/results2", False)

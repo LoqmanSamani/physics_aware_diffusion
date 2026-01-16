@@ -11,7 +11,7 @@ class GraphEnergyNet(nn.Module):
     where E_θ is the energy function (log probability). the computed logp
     is then used to compute score/noise through torch.autograd.grad()
     """
-    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, edge_dim: int = 36, num_heads: int = 4, dropout: float = 0.1, *args) -> None:
+    def __init__(self, atom_dim: int, hidden_dim: int, num_layers: int, edge_dim: int = 50, num_heads: int = 8, dropout: float = 0.1, *args) -> None:
         super().__init__()
         self.initializer = NodeInitializer(atom_dim, hidden_dim)
         self.layers = nn.ModuleList([
@@ -96,7 +96,7 @@ class MultiHeadGraphTransformer(nn.Module):
     where:
         e_ij = [x_i - x_j, ||x_i - x_j||]
     """
-    def __init__(self, hidden_dim: int, edge_dim: int = 33, num_heads: int = 4, dropout: float = 0.1) -> None:
+    def __init__(self, hidden_dim: int, edge_dim: int = 50, num_heads: int = 8, dropout: float = 0.1) -> None:
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
         self.hidden_dim = hidden_dim
@@ -182,7 +182,7 @@ class NodeInitializer(nn.Module):
         return h
 
 
-def compute_edge_features(coords: torch.Tensor, edge_index: torch.Tensor, num_rbf: int = 32, cutoff: float = 5.0) -> torch.Tensor:
+def compute_edge_features(coords: torch.Tensor, edge_index: torch.Tensor, num_rbf: int = 49, cutoff: float = 5.0) -> torch.Tensor:
     """
     compute translation-invariant edge features with distance encoding
     edge features are constructed as:

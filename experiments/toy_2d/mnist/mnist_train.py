@@ -24,8 +24,8 @@ cfg = load_config(str(config_path))
 set_seed(cfg["experiment"]["seed"])
 
 vs = LinearVS(
-    beta_start=cfg["diffusion"]["beta_start"],
-    beta_end=cfg["diffusion"]["beta_end"]
+    beta_min=cfg["diffusion"]["beta_min"],
+    beta_max=cfg["diffusion"]["beta_max"]
 ).to(cfg["experiment"]["device"])
 
 forward_vp = ForwardVP(vs).to(cfg["experiment"]["device"])
