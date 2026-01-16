@@ -11,7 +11,7 @@ def noise_from_energy(logp: torch.Tensor, xt: torch.Tensor, t: torch.Tensor, var
         create_graph=True,
         retain_graph=True
     )[0]
-    std = variance_scheduler.get_std(t)
+    std = variance_scheduler.std(t)
     while std.dim() < score.dim():
         std = std.unsqueeze(-1)
     return -std * score

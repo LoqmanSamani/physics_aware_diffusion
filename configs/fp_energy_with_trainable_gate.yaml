@@ -32,6 +32,8 @@ models:
     atom_dim: 1
     hidden_dim: 256
     num_layers: 4
+    edge_dim: 50
+    num_heads: 8
     dropout: 0.1
 
   fp_gate:
@@ -65,7 +67,7 @@ trainer:
   epochs: 50
   grad_acc: 2
   warmup_steps: 500
-  gate_epochs: 10
+  gate_epochs: 1
   rotation_augment: false
   mixed_precision: false
   compute_oracle: true

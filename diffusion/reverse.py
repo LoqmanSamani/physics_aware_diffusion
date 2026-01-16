@@ -42,6 +42,10 @@ class ReverseVP(nn.Module):
             noise = torch.randn_like(xt)
         diffusion = g * noise
         # euler-maruyama step
+        #print('dt:', dt.shape)
+        #print('xt: ', xt.shape)
+        #print('drift:', drift.shape)
+        #print('diffusion: ', diffusion.shape)
         x_prev = xt + drift * dt + diffusion * torch.sqrt(torch.abs(dt))
         return x_prev
 

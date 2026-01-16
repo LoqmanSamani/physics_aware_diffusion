@@ -69,26 +69,25 @@ class MolEnergyTrainer(nn.Module):
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
                         xt, true_score = self.forward_vp(x0, noise, t_atom)
-                        std_per_atom = self.forward_vp.vs.get_std(t_atom)
-                        variance = self.forward_vp.vs.get_variance(t_atom)
+                        std_per_atom = self.forward_vp.vs.std(t_atom)
                         while std_per_atom.dim() < noise.dim():
                             std_per_atom = std_per_atom.unsqueeze(-1)
                         xt.requires_grad_(True)
                         logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
                         pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
-                        loss_ = self.loss_fn(pred_noise, noise, variance, batch_idx) / self.grad_acc
+                        loss_ = self.loss_fn(pred_noise, noise, batch_idx) / self.grad_acc
                         weight = self.lambda_t(t_atom.mean().item())
                         loss = weight * loss_
                     self.scaler.scale(loss).backward()
                 else:
                     xt, true_score = self.forward_vp(x0, noise, t_atom)
-                    std_per_atom = self.forward_vp.vs.get_std(t_atom)
+                    std_per_atom = self.forward_vp.vs.std(t_atom)
                     while std_per_atom.dim() < noise.dim():
                         std_per_atom = std_per_atom.unsqueeze(-1)
                     xt.requires_grad_(True)
                     logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
                     pred_score = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
-                    loss_ = self.loss_fn(pred_score, true_score, variance, batch_idx) / self.grad_acc
+                    loss_ = self.loss_fn(pred_score, true_score, batch_idx) / self.grad_acc
                     weight = self.lambda_t(t_atom.mean().item())
                     loss = weight * loss_
                     loss.backward()

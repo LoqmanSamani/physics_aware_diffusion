@@ -16,7 +16,7 @@ def heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
         gen = None
     _, dim = x.shape
     # β_t = g^2(t)
-    beta_t = scheduler.get_variance(t)
+    beta_t = scheduler.variance(t)
     beta_t_exp = beta_t.unsqueeze(-1)
     # sample v ~ N(0, σ^2 I)
     v = sigma * torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=gen)
@@ -75,7 +75,7 @@ def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     else:
         gen = None
     _, dim = x.shape
-    beta_t = scheduler.get_variance(t)
+    beta_t = scheduler.variance(t)
     beta_t_exp = beta_t.unsqueeze(-1)
     x = x.requires_grad_(True)
     logp = energy_net(x, atom_features, edge_index, t, batch_idx, reduce = False)

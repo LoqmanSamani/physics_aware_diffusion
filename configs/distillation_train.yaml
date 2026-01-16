@@ -20,14 +20,16 @@ val_loader:
 
 diffusion:
   type: vp_sde
-  beta_start: 0.1
-  beta_end: 20.0
+  beta_min: 0.1
+  beta_max: 20.0
 
 model:
   name: graph_energy_net
   atom_dim: 3
   hidden_dim: 256
-  num_layers: 6
+  num_layers: 4
+  edge_dim: 50
+  num_heads: 4
   dropout: 0.1
 
 training:

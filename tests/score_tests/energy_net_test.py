@@ -1,7 +1,7 @@
 import pytest
 import torch
 import torch.nn as nn
-from score_nets.graph_energy_net import (
+from score_nets.graph_energy_net_ import (
     EnergyNet,
     GraphTransformer,
     NodeInitializer,

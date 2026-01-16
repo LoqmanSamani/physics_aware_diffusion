@@ -12,14 +12,16 @@ dataset:
 diffusion:
   type: vp_sde
   num_steps: 1000
-  beta_start: 0.1
-  beta_end: 20.0
+  beta_min: 0.1
+  beta_max: 20.0
 
 model:
   name: graph_score_net
   atom_dim: 1
   hidden_dim: 256
   num_layers: 6
+  num_heads: 8
+  edge_dim: 50
   dropout: 0.1
 
 training:
@@ -37,4 +39,4 @@ training:
 logging:
   log_freq: 5
   checkpoint_freq: 10
-  output_dir: ./result
+  output_dir: ./results

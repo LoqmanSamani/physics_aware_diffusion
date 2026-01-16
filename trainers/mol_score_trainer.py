@@ -66,8 +66,8 @@ class MolScoreTrainer(nn.Module):
                 if self.use_amp:
                     with torch.amp.autocast('cuda'):
                         noisy_x, true_score = self.forward_vp(x, noise, time_per_atom)
-                        std_per_atom = self.forward_vp.vs.get_std(time_per_atom)
-                        variance = self.forward_vp.vs.get_variance(time_per_atom)
+                        std_per_atom = self.forward_vp.vs.std(time_per_atom)
+                        variance = self.forward_vp.vs.variance(time_per_atom)
                         while std_per_atom.dim() < noise.dim():
                             std_per_atom = std_per_atom.unsqueeze(-1)
                         pred_noise = self.score_net(
@@ -86,8 +86,8 @@ class MolScoreTrainer(nn.Module):
                     self.scaler.scale(loss).backward()
                 else:
                     noisy_x, true_score = self.forward_vp(x, noise, time_per_atom)
-                    variance = self.forward_vp.vs.get_variance(time_per_atom)
-                    std_per_atom = self.forward_vp.vs.get_std(time_per_atom)
+                    variance = self.forward_vp.vs.variance(time_per_atom)
+                    std_per_atom = self.forward_vp.vs.std(time_per_atom)
                     while std_per_atom.dim() < noise.dim():
                         std_per_atom = std_per_atom.unsqueeze(-1)
                     score = self.score_net(

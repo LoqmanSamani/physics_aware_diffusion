@@ -178,7 +178,7 @@ class FPEnergyTrainer(nn.Module):
         logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
         pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs)
         pred_score = self.score_fn(logp, xt)
-        var = self.forward_vp.vs.get_variance(t_atom)
+        var = self.forward_vp.vs.variance(t_atom)
         dsm_loss = self.lambda_t(t_atom.mean().item()) * self.dsm_loss(pred_noise, noise, var) # weighted dsm-loss
         with torch.no_grad():
             gate_features = self.fp_gate.fp_gate_features(

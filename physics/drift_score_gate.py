@@ -2,9 +2,9 @@ import torch
 
 
 def fp_gate(x0: torch.Tensor, t_atom: torch.Tensor, variance_scheduler,
-            k: float = 1.0, t_max: float = 0.5,
-            distance_threshold: float = 1.5,
-            snr_min: float = 0.3):
+            k: float = 1.2, t_max: float = 0.2,
+            distance_threshold: float = 1.3,
+            snr_min: float = 0.5):
     """
     multi-criteria drift–diffusion dominance gate for FP regularization.
     arguments:
@@ -25,7 +25,14 @@ def fp_gate(x0: torch.Tensor, t_atom: torch.Tensor, variance_scheduler,
     # snr criterion (avoid very noisy regime)
     alpha_t = variance_scheduler.alpha(t_atom)
     snr = alpha_t / (1 - alpha_t + 1e-8)
-    mask = ((ddr > k) & (t_atom < t_max) & (distance > distance_threshold) & (snr > snr_min))
+    gate = torch.sigmoid(5.0 * (ddr - k))
+    mask = ((gate > 0.5) & (t_atom < t_max) & (distance > distance_threshold) & (snr > snr_min))
+    #print("--------------------------------------------------------")
+    #print("t: ", t_atom)
+    #print("snr: ", snr)
+    #print("distance: ", distance)
+    #print("ddr: ", ddr)
+    #print("--------------------------------------------------------")
     return mask
 
 def fp_gate_(x0: torch.Tensor, t_atom: torch.Tensor, variance_scheduler, k: float, t_max: float, *args):

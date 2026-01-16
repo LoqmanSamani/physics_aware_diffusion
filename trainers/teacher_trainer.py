@@ -187,7 +187,7 @@ class TeacherTrainer(nn.Module):
                 self.energy_net, xt_active, atom_feat_active, edge_idx_active,
                 t_active, batch_active, self.forward_vp.vs, seed2
             )
-            var = self.forward_vp.vs.get_variance(t_active)
+            var = self.forward_vp.vs.variance(t_active)
             fp_lambda_val = self.lambda_t(t_active.mean())
             fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, alpha=self.fp_alpha) # weighted fp-loss
             #fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, variance=var, alpha=self.fp_alpha)

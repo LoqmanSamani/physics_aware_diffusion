@@ -11,11 +11,15 @@ class MDSampler:
     sampling methods for energy-based diffusion models
     supports both iid sampling (denoising) and md simulation
     """
-    def __init__(self, energy_net: nn.Module, reverse_vp: nn.Module, score_fn: Callable, eps_time: float = 1e-5,
-                 store_path: str = "./samples", device: torch.device | None = None):
+    def __init__(self, energy_net: nn.Module, reverse_vp: nn.Module, score_fn: Callable, dist_energy_net: nn.Module = None,
+                 eps_time: float = 1e-5, store_path: str = "./samples", device: torch.device | None = None):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.energy_net = energy_net.to(self.device)
         self.reverse_vp = reverse_vp.to(self.device)
+        if dist_energy_net is not None:
+            self.dist_energy_net = dist_energy_net.to(self.device)
+        else:
+            self.dist_energy_net = dist_energy_net
         self.score_fn = score_fn # derive score from energy (output of energy-net)
         self.eps_time = eps_time
         self.store_path = store_path
@@ -37,6 +41,8 @@ class MDSampler:
         results = {"x0": None, "trajectory": []}
         self.energy_net.eval()
         self.reverse_vp.eval()
+        if self.dist_energy_net is not None:
+            self.dist_energy_net.eval()
         # number of atom per molecules
         num_atoms = atom_features.shape[0]
         # start from pure noise
@@ -72,7 +78,10 @@ class MDSampler:
                 xt_flat = xt.reshape(-1, 3) # (num_samples * num_atoms, 3)
                 xt_flat.requires_grad_(True)
                 # compute energy
-                logp = self.energy_net(xt_flat, af_flat, edge_index_batched, t_atom)
+                if self.dist_energy_net is not None:
+                    logp = self.dist_energy_net(xt_flat, af_flat, edge_index_batched, t_atom, batch_idx)
+                else:
+                    logp = self.energy_net(xt_flat, af_flat, edge_index_batched, t_atom, batch_idx)
                 score = self.score_fn(logp, xt_flat) # score = ∇_x log p(x|t)
                 assert score.shape == xt_flat.shape, "score shape mismatch"
                 # take reverse sde or ode step
@@ -104,7 +113,7 @@ class MDSampler:
         return results
 
     def get_forces(self, x: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
-                   batch_idx: Optional[torch.Tensor] = None, t_eval: float = 1e-5, kb_t: float = 1.0
+                   batch_idx: Optional[torch.Tensor] = None,* ,t_eval: float = 1e-5, kb_t: float = 1.0
     ) -> torch.Tensor:
         """
         extract forces from the score at t ≈ 0
@@ -128,7 +137,7 @@ class MDSampler:
             x = x.detach()
             x.requires_grad_(True)
             # computes energy and score
-            logp = self.energy_net(x, atom_features, edge_index, t_atom)
+            logp = self.energy_net(x, atom_features, edge_index, t_atom, batch_idx)
             score = self.score_fn(logp, x)
             forces = (score * kb_t).detach()
             #if torch.isnan(forces).any():
@@ -137,7 +146,7 @@ class MDSampler:
 
     def simulate_langevin(self, x0: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                           num_steps: int, dt: float = 2.0, temp: float = 300.0, friction: float = 1.0,
-                          mass: float = 1.0,  kb: float = 1.380649e-23, save_frequency: int = 100) -> Dict:
+                          mass: float = 1.0,  kb: float = 1.380649e-23, save_frequency: int = 100, t_eval = 1e-5) -> Dict:
         """
         langevin dynamics simulation using learned forces
         dx = v dt
@@ -165,16 +174,16 @@ class MDSampler:
         mass = torch.tensor(mass, device=x.device)
         v = torch.randn_like(x) * torch.sqrt((kb_t / mass).detach().clone()) # maxwell-boltzmann
         alpha = torch.exp(torch.tensor(-friction * dt, device=x.device))
+        sigma = torch.sqrt(kb_t * (1 - alpha ** 2) / mass)
         results = {'trajectory': [x.clone()], 'velocity_trajectory': [v.clone()]}
         steps = tqdm(range(num_steps), desc="MD-Trajectory")
         for step in steps:
             with self.freeze_params(self.energy_net):
                 # get forces from the trained energy model
-                forces = self.get_forces(x, atom_features, edge_index)
+                forces = self.get_forces(x, atom_features, edge_index, kb_t = float(kb_t), t_eval = t_eval)
                 # langevin integrator
                 #-----------------------------------------------------------------
                 # update velocity
-                sigma = torch.sqrt(kb_t * (1 - alpha ** 2) / mass)
                 v = (alpha * v + (1 - alpha) / (friction * mass) * forces + sigma * torch.randn_like(v))
                 # update position
                 x = x + dt * v

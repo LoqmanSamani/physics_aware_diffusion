@@ -4,21 +4,23 @@ experiment:
 
 dataset:
   name: NodeGaussian3DToy
-  n_samples: 2048
+  n_samples: 51200
   sigma_min: 0.1
   sigma_max: 2.0
 
 model:
-  name: graph_score_net
+  name: graph_energy_net
   time_embedding: TimeEmbedding
   atom_dim: 1
-  hidden_dim: 64
+  hidden_dim: 128
   num_layers: 2
-  dropout: 0.0
+  num_heads: 2
+  edge_dim: 50
+  dropout: 0.2
 
 training:
-  batch_size: 64
+  batch_size: 512
   epochs: 50
-  learning_rate: 0.0005
+  learning_rate: 0.0001
   precision: fp32
   optimizer: adam

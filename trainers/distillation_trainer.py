@@ -18,7 +18,7 @@ class DistTrainer(nn.Module):
             energy_net: nn.Module,
             forward_vp: nn.Module,
             reverse_vp: nn.Module,
-            dt, # student sampling step
+            dt: float, # student sampling step
             data_loader,
             optimizer: torch.optim.Optimizer,
             fp_gate: Callable,
@@ -49,7 +49,7 @@ class DistTrainer(nn.Module):
         self.energy_net = energy_net.to(self.device)
         self.forward_vp = forward_vp.to(self.device)
         self.reverse_vp = reverse_vp.to(self.device)
-        self.dt = dt
+        self.dt = torch.tensor(dt).to(self.device) if dt < 0.0 else torch.tensor(-dt).to(self.device)
         self.data_loader = data_loader
         self.val_loader = val_loader
         self.optimizer = optimizer
@@ -192,7 +192,8 @@ class DistTrainer(nn.Module):
             logp_t = self.t_energy_net(xt1, atom_features, edge_index, t_atom, batch_idx)
             t_score_t = self.score_fn(logp_t, xt1)
             # t -> 0 should be properly handled this way
-            dt_small = torch.minimum(torch.full_like(t_atom, self.dt.item()), t_atom - self.eps_time)
+            min_remaining = (t_atom - self.eps_time).min()
+            dt_small = torch.maximum(self.dt, -min_remaining)
             #noise1 = torch.randn_like(xt1)
             # xt: torch.Tensor, score: torch.Tensor, t: torch.Tensor, dt: float
             xt_dt = self.reverse_vp(xt1, t_score_t, t_atom, dt_small)
@@ -205,8 +206,8 @@ class DistTrainer(nn.Module):
             logp_t2 = self.t_energy_net(xt_dt, atom_features, edge_index, t_atom_2, batch_idx)
             t_score_t2 = self.score_fn(logp_t2, xt_dt)
             if valid_mask_2.any():
-                dt_small_2 = torch.minimum(torch.full_like(t_atom_2[valid_mask_2], self.dt.item()), t_atom_2[valid_mask_2] - self.eps_time)
-                noise2 = torch.randn_like(xt_dt[valid_mask_2])
+                dt_small_2 = torch.maximum(self.dt, -(t_atom_2[valid_mask_2] - self.eps_time).min())
+                #noise2 = torch.randn_like(xt_dt[valid_mask_2])
                 xt_2dt[valid_mask_2] = self.reverse_vp(
                     xt_dt[valid_mask_2], t_score_t2[valid_mask_2], t_atom_2[valid_mask_2], dt_small_2
                 )
@@ -219,9 +220,7 @@ class DistTrainer(nn.Module):
         valid_mask_st = t_atom > self.eps_time
         xt_st_2dt = xt_st.clone()
         if valid_mask_st.any():
-            dt_eff = torch.minimum(
-                torch.full_like(t_atom[valid_mask_st], 2.0 * self.dt.item()), t_atom[valid_mask_st] - self.eps_time
-            )
+            dt_eff = torch.maximum(2.0 * self.dt, -(t_atom[valid_mask_st] - self.eps_time).min())
             xt_st_2dt[valid_mask_st] = self.reverse_vp.probability_flow_ode(
                 xt_st[valid_mask_st], st_score[valid_mask_st], t_atom[valid_mask_st], dt_eff
             )
@@ -248,7 +247,7 @@ class DistTrainer(nn.Module):
                 self.energy_net, xt_active, atom_feat_active, edge_idx_active,
                 t_active, batch_active, self.forward_vp.vs, seed2
             )
-            var = self.forward_vp.vs.get_variance(t_active)
+            var = self.forward_vp.vs.variance(t_active)
             fp_lambda_val = self.lambda_t(t_active.mean())
             fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, alpha=self.fp_alpha)  # weighted fp-loss
             # fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, variance=var, alpha=self.fp_alpha)
@@ -276,8 +275,8 @@ class DistTrainer(nn.Module):
                 xt1 = xt.clone().requires_grad_(True)
                 logp_t = self.t_energy_net(xt1, atom_features, edge_index, t_atom, batch_idx)
                 t_score_t = self.score_fn(logp_t, xt1)
-                dt_small = torch.minimum(torch.full_like(t_atom, self.dt.item()), t_atom - self.eps_time)
-                noise1 = torch.randn_like(xt1)
+                dt_small = torch.maximum(self.dt, -(t_atom - self.eps_time).min())
+                #noise1 = torch.randn_like(xt1)
                 xt_dt = self.reverse_vp(xt1, t_score_t, t_atom, dt_small)
                 t_atom_2 = t_atom - dt_small
                 # allocate output
@@ -287,10 +286,8 @@ class DistTrainer(nn.Module):
                 logp_t2 = self.t_energy_net(xt_dt, atom_features, edge_index, t_atom_2, batch_idx)
                 t_score_t2 = self.score_fn(logp_t2, xt_dt)
                 if valid_mask_2.any():
-                    dt_small_2 = torch.minimum(
-                        torch.full_like(t_atom_2[valid_mask_2], self.dt.item()), t_atom_2[valid_mask_2] - self.eps_time
-                    )
-                    noise2 = torch.randn_like(xt_dt[valid_mask_2])
+                    dt_small_2 = torch.maximum(self.dt, -(t_atom_2[valid_mask_2] - self.eps_time).min())
+                    #noise2 = torch.randn_like(xt_dt[valid_mask_2])
                     xt_2dt[valid_mask_2] = self.reverse_vp(
                         xt_dt[valid_mask_2], t_score_t2[valid_mask_2], t_atom_2[valid_mask_2], dt_small_2
                     )
@@ -301,9 +298,7 @@ class DistTrainer(nn.Module):
                     valid_mask_st = t_atom > self.eps_time
                     xt_st_2dt = xt_st.clone()
                     if valid_mask_st.any():
-                        dt_eff = torch.minimum(
-                            torch.full_like(t_atom[valid_mask_st], 2.0 * self.dt.item()), t_atom[valid_mask_st] - self.eps_time
-                        )
+                        dt_eff = torch.maximum(2.0 * self.dt, -(t_atom[valid_mask_st] - self.eps_time).min())
                         xt_st_2dt[valid_mask_st] = self.reverse_vp.probability_flow_ode(
                             xt_st[valid_mask_st], st_score[valid_mask_st], t_atom[valid_mask_st], dt_eff
                         )
