@@ -1,4 +1,4 @@
-# Energy-Based Diffusion Models with Adaptive Fokker-Planck Regularization
+# Physics-Aware Diffusion Models for Efficient Molecular Dynamics
 
 ## Overview
 
@@ -8,15 +8,15 @@ Energy-based diffusion models trained on molecular dynamics (MD) simulations can
 2. **Expensive inference** – Generating MD trajectories requires running the diffusion model for each configuration, scaling linearly with trajectory length
 3. **Physical inconsistency** – The learned score function at small diffusion times violates the Fokker-Planck equation, producing correct equilibrium distributions but incorrect dynamics
 
-Recent work has shown that enforcing Fokker-Planck consistency during training improves physical validity, but at significant computational cost.
+Recent work [(Plainer et al.)](https://arxiv.org/abs/2506.17139) has shown that enforcing Fokker-Planck consistency during training improves physical validity, but at significant computational cost.
 
 ## Research Goals
 
 This project develops methods to make energy-based diffusion models both **physically accurate** and **computationally efficient** through:
 
-1. **Adaptive Fokker-Planck regularization** – Apply the expensive Fokker-Planck constraint only when violations exceed a threshold, rather than at every training step
+1. **Adaptive Fokker-Planck regularization** – Apply the expensive Fokker-Planck constraint only when violations exceed a set of thresholds, rather than at every training step
 2. **Progressive distillation** – Compress the physically consistent model into a faster student model that:
-   - Uses fewer diffusion steps for independent sampling
+   - Uses fewer diffusion steps for independent sampling (optional)
    - Takes larger timesteps during MD simulation
    - Preserves both equilibrium statistics and conservative forces
 
@@ -31,6 +31,7 @@ The goal is to achieve substantial speedups while maintaining thermodynamic and 
 - **Fokker-Planck regularization**: Weak residual formulation with adaptive gating
 - **Training infrastructure**: Combined DSM + FP loss with batch processing
 - **Sampling methods**: Both independent (iid) sampling and Langevin dynamics simulation
+- **Distillation pipeline**: Progressive distillation of teacher model into fast student 
 
 ### 🧪 Validation Experiments (Complete)
 
@@ -71,7 +72,6 @@ Implemented and tested adaptive FP regularization:
 ### 🚧 In Progress
 
 - [ ] Real molecular system benchmarks (alanine dipeptide, small proteins)
-- [ ] Distillation pipeline for acceleration
 - [ ] Comprehensive evaluation metrics (PMF error, transition probabilities, bond distributions)
 - [ ] Comparison with baseline methods
 
@@ -124,51 +124,6 @@ physics_aware_diffusion/
 └── evaluation/                   # Metrics and analysis tools
 ```
 
-## Quick Start
-
-### Installation
-```bash
-git clone https://github.com/LoqmanSamani/physics_aware_diffusion
-cd physics_aware_diffusion
-pip install -r requirements.txt
-```
-
-### Train Teacher Model
-```bash
-python experiments/teacher_train.py --config configs/teacher_train.yaml
-```
-
-### Generate Samples
-```bash
-python experiments/md_sample.py --checkpoint checkpoints/teacher_model.pt
-```
-
-## Key Technical Details
-
-### Conservative Energy Parameterization
-Following recent work on energy-based diffusion models, we parameterize the score as:
-```
-s_θ(x,t) = ∇_x log p_θ(x,t) = ∇_x E_θ(x,t)
-```
-
-where `E_θ` is the learned energy function. This ensures:
-- Conservative forces for MD simulation
-- Gradient flow through molecular geometry
-- Physical consistency between sampling and simulation
-
-### Weak Fokker-Planck Residual
-The Fokker-Planck equation for diffusion processes is:
-```
-∂_t log p_t(x) = 0.5 g²(t)[div_x(s) + ||s||²] - ⟨f, s⟩ - div_x(f)
-```
-
-We use the weak formulation with Gaussian perturbations to avoid expensive second-order derivatives while maintaining unbiased estimation.
-
-### Adaptive Gating
-Instead of applying FP regularization at every training step, we:
-1. Monitor FP residual during training
-2. Apply regularization only when residual exceeds threshold
-3. Reduce computational cost while maintaining physical accuracy
 
 ## Preliminary Results
 
@@ -180,33 +135,10 @@ Instead of applying FP regularization at every training step, we:
 ## Next Steps
 
 1. **Benchmark on standard systems**: Alanine dipeptide, Chignolin, BBA
-2. **Implement distillation**: Compress teacher into fast student model
 3. **Comprehensive evaluation**: Compare against baseline methods on sampling quality and simulation accuracy
 4. **Large-scale experiments**: Test on dipeptide datasets and small proteins
 
-## Contact
-
-This work is part of my research portfolio for PhD applications. I have an MSc in Computational Biology and am seeking research positions/internships in machine learning for molecular simulation.
-
-**GitHub**: [LoqmanSamani](https://github.com/LoqmanSamani)  
-**Project**: [physics_aware_diffusion](https://github.com/LoqmanSamani/physics_aware_diffusion)
 
 ## License
 
 This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-This work builds upon:
-- *"Consistent Sampling and Simulation: Molecular Dynamics with Energy-Based Diffusion Models"* (Plainer et al., NeurIPS 2025)
-- Methods for conservative score parameterization and Fokker-Planck regularization
-
-## References
-```bibtex
-@inproceedings{plainer2025consistent,
-  title={Consistent Sampling and Simulation: Molecular Dynamics with Energy-Based Diffusion Models},
-  author={Plainer, Michael and Wu, Hao and Klein, Leon and G{\"u}nnemann, Stephan and No{\'e}, Frank},
-  booktitle={Advances in Neural Information Processing Systems},
-  year={2025}
-}
-```
