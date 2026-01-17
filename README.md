@@ -114,6 +114,7 @@ physics_aware_diffusion/
 │   ├── energy_trainer.py         # Standard energy-based training
 │   ├── gate_energy_trainer1.py   # Adaptive FP training
 │   └── distillation_trainer.py   # Student model training
+│
 ├── samplers/ 
 │   ├── md_sampler.py             # IID and Langevin samplers
 │   └── mnist_samplers.py         # MNIST sampler
