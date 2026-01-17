@@ -103,7 +103,7 @@ physics_aware_diffusion/
 │   ├── fp_residuals.py           # Fokker-Planck residual computation
 │   ├── drift_score_gate.py       # Adaptive FP gating
 │   ├── derive_score.py           # Score from energy gradient
-│   └── derive_noise.py           # Noise prediction utilities
+│   └── derive_noise.py           # Noise from energy gradinet 
 │
 ├── losses/                       # Loss functions
 │   ├── dsm_losses.py             # Denoising score matching
@@ -114,6 +114,9 @@ physics_aware_diffusion/
 │   ├── energy_trainer.py         # Standard energy-based training
 │   ├── gate_energy_trainer1.py   # Adaptive FP training
 │   └── distillation_trainer.py   # Student model training
+├── samplers/ 
+│   ├── md_sampler.py             # IID and Langevin samplers
+│   └── mnist_samplers.py         # MNIST sampler
 │
 ├── experiments/                  # Runnable scripts
 │   ├── teacher_train.py          # Train teacher model
