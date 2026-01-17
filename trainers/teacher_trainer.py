@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.amp import GradScaler
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Dict, Optional
 from torch.nn.utils import clip_grad_norm_
 from contextlib import contextmanager
 from tqdm import tqdm
@@ -35,9 +35,8 @@ class TeacherTrainer(nn.Module):
             fp_alpha: float = 5e-4,
             mix_precision: bool = True,
             lambda_t: Callable[[torch.Tensor], torch.Tensor] = lambda t: torch.exp(-t), # time-dependent weighting λ(t)
-            k: float = 1.0,
-            t_max: float =  0.5,
             eps_time: float = 1e-5,
+            gate_params: Optional[Dict] = None,
             *args
     ) -> None:
         super().__init__()
@@ -62,9 +61,9 @@ class TeacherTrainer(nn.Module):
         self.lambda_t = lambda_t
         self.fp_alpha = fp_alpha
         self.mix_precision = mix_precision
-        self.k = k
-        self.t_max = t_max
         self.eps_time = eps_time
+        self.gate_params = {"k": 1.2, "snr_min": 0.5, "t_scale": 0.1, "sharpness": 5.0, "eps": 0.1}\
+            if gate_params is None else gate_params
         self.global_step = 0
         self.base_lr = optimizer.param_groups[0]['lr']
         self.best_loss = float('inf')
@@ -172,8 +171,11 @@ class TeacherTrainer(nn.Module):
         pred_noise = self.noise_fn(logp, xt, t_atom, self.forward_vp.vs) # derive score form energy and then convert it to noise
         dsm_loss = lambda_val * self.dsm_loss(pred_noise, noise, batch_idx) # weighted dsm-loss
         fp_loss = torch.tensor(0.0, device=self.device)
-        fp_mask = self.fp_gate(x0, t_atom, self.forward_vp.vs, self.k, self.t_max)
-        if fp_mask.any():
+        fp_mask, activate_fp = self.fp_gate(
+            x0, t_atom, self.forward_vp.vs, k=self.gate_params['k'], snr_min=self.gate_params['snr_min'],
+            t_scale=self.gate_params['t_scale'], sharpness=self.gate_params['sharpness'], eps=self.gate_params['eps']
+        )
+        if activate_fp:
             xt_active, atom_feat_active, edge_idx_active, batch_active, t_active = self.subset_graph_data(
                     xt, atom_features, edge_index, t_atom, batch_idx, fp_mask, torch.unique(batch_idx[fp_mask])
             )

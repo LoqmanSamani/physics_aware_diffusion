@@ -34,7 +34,7 @@ class DistTrainer(nn.Module):
             log_freq: int = 1,
             store_path: str = "./checkpoints",
             warmup_steps: int = 0,
-            rotation_augment: bool = False, # if true molecules will be randomly augmented throw training
+            rotation_augment: bool = False, # if true molecules will be randomly augmented through  training
             fp_alpha: float = 5e-4,
             mix_precision: bool = True,
             lambda_t: Callable[[torch.Tensor], torch.Tensor] = lambda t: torch.exp(-t), # time-dependent weighting λ(t)

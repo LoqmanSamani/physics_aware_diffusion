@@ -1,6 +1,6 @@
 import torch
 from data.loaders.molecular_dataset import SyntheticMolecularDataset, create_dataloader
-from trainers.distillation_trainer import DistTrainer
+from trainers.diff_dist_trainer import DistTrainer
 from score_nets.graph_energy_net import GraphEnergyNet
 from diffusion.forward import ForwardVP
 from diffusion.reverse import ReverseVP
