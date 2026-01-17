@@ -51,12 +51,12 @@ Verified that the energy network correctly learns scores for systems with known 
 #### 2. 2D Image Generation Baseline
 Verified diffusion components work correctly on standard benchmark:
 
-- Trained VP-SDE with tiny U-Net on MNIST
+- Trained VP-SDE with tiny U-Net on MNIST ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/experiments/mnist_train.py))
 - Generated clear digit samples ([results](https://github.com/LoqmanSamani/physics_aware_diffusion/tree/systembiology/results/mnist_results))
 - Confirms forward/reverse processes are correctly implemented
 
 #### 3. Molecular System Overfitting
-Verified energy network + VP-SDE works on molecular data:
+Verified energy network + VP-SDE works on molecular data ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/experiments/synthetic_energy_train.py)):
 
 - Created synthetic molecular datasets with known properties
 - Successfully overfit small datasets
@@ -67,7 +67,7 @@ Implemented and tested adaptive FP regularization:
 
 - Weak FP residual computation ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/physics/fp_residuals.py))
 - Adaptive gating mechanism ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/physics/drift_score_gate.py))
-- Training with FP loss ([experiments](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/experiments/teacher_train.py))
+- Training with DSM + FP loss ([experiments](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/experiments/teacher_train.py))
 
 ### 🚧 In Progress
 
