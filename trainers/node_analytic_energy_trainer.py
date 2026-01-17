@@ -6,7 +6,7 @@ from typing import Callable
 
 
 class AnalyticEnergyTrainer(nn.Module):
-    """trainer for sanity-checking score net using analytic score targets"""
+    """trainer for sanity-checking energy net using analytic score targets"""
     def __init__(self, energy_net: nn.Module, score_from_energy: Callable, data_loader, optimizer,
                  score_fn: Callable, epochs: int, device: str):
         super().__init__()

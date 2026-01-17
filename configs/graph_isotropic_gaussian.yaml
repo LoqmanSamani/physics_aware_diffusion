@@ -7,8 +7,8 @@ dataset:
   n_samples: 12800
   sigma_min: 0.1
   sigma_max: 2.0
-  min_nodes: 5
-  max_nodes: 10
+  min_nodes: 2
+  max_nodes: 2
 
 model:
   name: graph_score_net

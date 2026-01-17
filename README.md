@@ -1,202 +1,212 @@
-# Physics-Aware Diffusion Models
+# Energy-Based Diffusion Models with Adaptive Fokker-Planck Regularization
 
-This project develops energy-based diffusion models for generating molecular configurations. These models can potentially reduce or replace computationally expensive molecular dynamics simulations.
+## Overview
 
-## Problem Statement
+Energy-based diffusion models trained on molecular dynamics (MD) simulations can generate equilibrium molecular configurations, potentially reducing the need for expensive MD simulations. However, these models face several critical limitations:
 
-Current diffusion models for molecular systems face several challenges:
+1. **Training instability** – Standard training procedures often fail to converge reliably
+2. **Expensive inference** – Generating MD trajectories requires running the diffusion model for each configuration, scaling linearly with trajectory length
+3. **Physical inconsistency** – The learned score function at small diffusion times violates the Fokker-Planck equation, producing correct equilibrium distributions but incorrect dynamics
 
-- **Training instability** and high computational cost during inference
-- **Expensive trajectory generation** - each configuration requires a full reverse diffusion process
-- **Physical inconsistencies** - the learned score function often violates the Fokker-Planck equation at near-zero diffusion times, producing correct equilibrium distributions but incorrect dynamics
+Recent work has shown that enforcing Fokker-Planck consistency during training improves physical validity, but at significant computational cost.
 
-While enforcing Fokker-Planck consistency during training improves physical validity, it adds significant computational overhead.
+## Research Goals
 
-## Our Approach
+This project develops methods to make energy-based diffusion models both **physically accurate** and **computationally efficient** through:
 
-We combine two key techniques:
+1. **Adaptive Fokker-Planck regularization** – Apply the expensive Fokker-Planck constraint only when violations exceed a threshold, rather than at every training step
+2. **Progressive distillation** – Compress the physically consistent model into a faster student model that:
+   - Uses fewer diffusion steps for independent sampling
+   - Takes larger timesteps during MD simulation
+   - Preserves both equilibrium statistics and conservative forces
 
-1. **Selective Fokker-Planck regularization** - We treat Fokker-Planck consistency as a diagnostic constraint, enforcing it only when violations exceed a threshold
-2. **Energy-consistent distillation** - We compress the physically consistent model into a fast sampling scheme
+The goal is to achieve substantial speedups while maintaining thermodynamic and dynamic correctness.
 
-This approach reduces computational complexity while maintaining both thermodynamic accuracy and correct dynamics.
+## Current Implementation Status
 
-## Key Features
+### ✅ Core Components (Complete)
 
-- Energy-parameterized diffusion models
-- Adaptive Fokker-Planck regularization via residual gating
-- Distillation into normalizing flows
-- Evaluation via force error and Langevin stability metrics
+- **VP-SDE diffusion framework**: Forward process, reverse sampling, variance scheduler
+- **Energy network**: Graph transformer with conservative parameterization for molecular systems
+- **Fokker-Planck regularization**: Weak residual formulation with adaptive gating
+- **Training infrastructure**: Combined DSM + FP loss with batch processing
+- **Sampling methods**: Both independent (iid) sampling and Langevin dynamics simulation
 
-## Progress
+### 🧪 Validation Experiments (Complete)
 
-### Phase 1: Core Diffusion Model ✓
+#### 1. Analytical Sanity Checks
+Verified that the energy network correctly learns scores for systems with known analytical solutions:
 
-We have implemented and tested the fundamental components of a variance-preserving SDE diffusion model:
+- **Single-node Gaussian** ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/experiments/node_isotropic_gaussion_train.py)): 
+  - Dataset: 3D isotropic Gaussian
+  - True score: `∇_x log p(x) = -x / σ²`
+  - Result: Model accurately recovers analytical score
 
-- [Forward process](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/diffusion/forward.py) - adds noise to data
-- [Reverse process](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/diffusion/reverse.py) - generates samples
-- [Variance scheduler](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/diffusion/schedules.py) - controls noise levels over time
+- **Two-node spring system** ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/experiments/graph_isotropic_gaussion_train.py)):
+  - Dataset: Two nodes with spring potential `p(x) ∝ exp(-k||x₁ - x₂||²)`
+  - True score: `∇_{x₁} log p = -2k(x₁ - x₂)`
+  - Result: Model correctly learns pairwise forces
 
-All components include [unit tests](https://github.com/LoqmanSamani/physics_aware_diffusion/tree/systembiology/tests/diffusion_tests) to ensure correctness.
+#### 2. 2D Image Generation Baseline
+Verified diffusion components work correctly on standard benchmark:
 
-### Validation Experiment
+- Trained VP-SDE with tiny U-Net on MNIST
+- Generated clear digit samples ([results](https://github.com/LoqmanSamani/physics_aware_diffusion/tree/systembiology/results/mnist_results))
+- Confirms forward/reverse processes are correctly implemented
 
-To verify our implementation, we trained a diffusion model on the [MNIST dataset](https://docs.pytorch.org/vision/main/generated/torchvision.datasets.MNIST.html). This lightweight experiment uses:
+#### 3. Molecular System Overfitting
+Verified energy network + VP-SDE works on molecular data:
 
-- A [UNet-based architecture](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/score_nets/tiny_unet.py) with attention mechanism as the score network
-- Custom [training algorithm](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/trainers/diffusion_trainer.py)
-- DDPM-style [sampling algorithm](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/samplers/diffusion_sampler.py)
+- Created synthetic molecular datasets with known properties
+- Successfully overfit small datasets
+- Confirms all components integrate correctly for molecular systems
 
-**Results:**
+#### 4. Fokker-Planck Integration
+Implemented and tested adaptive FP regularization:
 
-<div align="center">
-  <img src="results/mnist_results/figs.png" alt="Generated samples" width="1000"/>
-  <br>
-  <em>Samples generated by our trained model</em>
-  <br><br>
-</div>
+- Weak FP residual computation ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/physics/fp_residuals.py))
+- Adaptive gating mechanism ([code](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/physics/drift_score_gate.py))
+- Training with FP loss ([experiments](https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/experiments/teacher_train.py))
 
-<div align="center">
-  <img src="results/mnist_results/diff_steps3.png" alt="Sampling process" width="1000"/>
-  <br>
-  <em>Three samples shown at different time steps during the sampling process</em>
-  <br><br>
-</div>
+### 🚧 In Progress
 
-The results confirm that our core implementation works correctly.
-
-### Next Steps
-
-Phase 2 will focus on implementing and integrating the Fokker-Planck components into the diffusion model, followed by testing on molecular systems.
+- [ ] Real molecular system benchmarks (alanine dipeptide, small proteins)
+- [ ] Distillation pipeline for acceleration
+- [ ] Comprehensive evaluation metrics (PMF error, transition probabilities, bond distributions)
+- [ ] Comparison with baseline methods
 
 ## Repository Structure
-```bash
+```
 physics_aware_diffusion/
 │
-├── README.md
-├── requirements.txt
-├── setup.py                      
-│
-├── configs/
-│   ├── base.yaml                  # shared hyperparameters
-│   ├── diffusion_vp.yaml
-│   ├── diffusion_ve.yaml
-│   ├── fp_regularization.yaml
-│   ├── distillation.yaml
+├── configs/                      # YAML configuration files
+│   ├── teacher_train.yaml        # Main teacher model training
+│   ├── distillation_train.yaml   # Student distillation
+│   └── ...
 │
 ├── data/
-│   ├── raw/
-│   │   ├── toy_gaussians.py
-│   │   ├── double_well.py
-│   │   ├── muller_brown.py
-│   │   └── md_small_system.npz
-│   │
-│   ├── processed/
-│   │   ├── toy_2d.npz
-│   │   └── muller_brown.npz
-│   │
-│   └── loaders.py
+│   └── loaders/                  # Dataset implementations
+│       ├── molecular_dataset.py  # Molecular conformation loader
+│       ├── graph_3d.py           # Graph-structured data
+│       └── node_dataset.py       # Single-node distributions
 │
-├── models/
-│   ├── __init__.py
-│   │
-│   ├── energy/
-│   │   ├── energy_net.py          # E_theta(x, t)
-│   │   ├── time_embedding.py
-│   │   └── __init__.py
-│   │
-│   ├── score/
-│   │   ├── energy_net.py            # alternative to energy form
-│   │   └── __init__.py
-│   │
-│   ├── flow/
-│   │   ├── realnvp.py
-│   │   ├── coupling.py
-│   │   ├── base_distribution.py
-│   │   └── __init__.py
-│   │
-│   └── utils.py                   # weight init, helpers
+├── diffusion/                    # Core diffusion algorithms
+│   ├── schedules.py              # Variance schedulers (LinearVS)
+│   ├── forward.py                # Forward diffusion (ForwardVP)
+│   └── reverse.py                # Reverse sampling (ReverseVP)
 │
-├── diffusion/
-│   ├── __init__.py
-│   ├── sde.py                     #SDE definitions
-│   ├── schedules.py               # beta(t), sigma(t)
-│   ├── forward.py                 # x0 -> xt
-│   ├── reverse.py                 # sampling
-│   └── probability_flow.py
+├── score_nets/                   # Neural network architectures
+│   ├── energy_net.py             # Energy-based graph transformer
+│   └── tiny_unet.py              # 2D U-Net for baselines
 │
-├── physics/
-│   ├── __init__.py
-│   ├── fokker_planck.py            # FP operator & residual
-│   ├── divergence.py               # Hutchinson estimator
-│   ├── gating.py                   # adaptive alpha(x,t)
-│   └── energies.py                 # energy/force utilities
+├── physics/                      # Physics-informed components
+│   ├── fp_residuals.py           # Fokker-Planck residual computation
+│   ├── drift_score_gate.py       # Adaptive FP gating
+│   ├── derive_score.py           # Score from energy gradient
+│   └── derive_noise.py           # Noise prediction utilities
 │
-├── losses/
-│   ├── __init__.py
-│   ├── dsm.py                      # denoising score matching
-│   ├── fp_loss.py                  # adaptive FP loss
-│   ├── distillation.py
-│   └── regularizers.py
+├── losses/                       # Loss functions
+│   ├── dsm_losses.py             # Denoising score matching
+│   ├── fp_losses.py              # Fokker-Planck regularization
+│   └── distillation_loss.py      # Student-teacher distillation
 │
-├── trainers/
-│   ├── __init__.py
-│   ├── diffusion_trainer.py
-│   ├── fp_diffusion_trainer.py
-│   ├── distillation_trainer.py
-│   └── callbacks.py
+├── trainers/                     # Training loops
+│   ├── energy_trainer.py         # Standard energy-based training
+│   ├── gate_energy_trainer1.py   # Adaptive FP training
+│   └── distillation_trainer.py   # Student model training
 │
-├── evaluation/
-│   ├── __init__.py
-│   ├── sampling.py
-│   ├── langevin.py
-│   ├── free_energy.py
-│   ├── force_error.py
-│   └── metrics.py
+├── experiments/                  # Runnable scripts
+│   ├── teacher_train.py          # Train teacher model
+│   ├── distillation_train.py     # Train student model
+│   ├── md_sample.py              # Molecular dynamics sampling
+│   └── ...
 │
-├── experiments/
-│   ├── toy_2d/
-│   │   ├── train_baseline.py
-│   │   ├── train_fp_adaptive.py
-│   │   ├── distill_flow.py
-│   │   └── eval.py
-│   │
-│   ├── muller_brown/
-│   │   ├── train_fp.py
-│   │   ├── distill.py
-│   │   └── eval.py
-│   │
-│   └── md_small/
-│       ├── train_fp.py
-│       └── eval.py
-│
-├── scripts/
-│   ├── preprocess_data.py
-│   ├── sample_diffusion.py
-│   ├── sample_flow.py
-│   └── run_experiment.sh
-│
-├── notebooks/
-│   ├── fp_residual_analysis.ipynb
-│   ├── energy_landscape.ipynb
-│   ├── force_visualization.ipynb
-│   └── distillation_comparison.ipynb
-│
-├── checkpoints/
-│   ├── diffusion/
-│   └── flow/
-│
-├── results/
-│   ├── figures/
-│   ├── logs/
-│   └── tables/
-│
-└── tests/
-    ├── test_sde.py
-    ├── test_fp_residual.py
-    ├── test_energy_grad.py
-    └── test_flow_logp.py
+└── evaluation/                   # Metrics and analysis tools
 ```
 
+## Quick Start
 
+### Installation
+```bash
+git clone https://github.com/LoqmanSamani/physics_aware_diffusion
+cd physics_aware_diffusion
+pip install -r requirements.txt
+```
+
+### Train Teacher Model
+```bash
+python experiments/teacher_train.py --config configs/teacher_train.yaml
+```
+
+### Generate Samples
+```bash
+python experiments/md_sample.py --checkpoint checkpoints/teacher_model.pt
+```
+
+## Key Technical Details
+
+### Conservative Energy Parameterization
+Following recent work on energy-based diffusion models, we parameterize the score as:
+```
+s_θ(x,t) = ∇_x log p_θ(x,t) = ∇_x E_θ(x,t)
+```
+
+where `E_θ` is the learned energy function. This ensures:
+- Conservative forces for MD simulation
+- Gradient flow through molecular geometry
+- Physical consistency between sampling and simulation
+
+### Weak Fokker-Planck Residual
+The Fokker-Planck equation for diffusion processes is:
+```
+∂_t log p_t(x) = 0.5 g²(t)[div_x(s) + ||s||²] - ⟨f, s⟩ - div_x(f)
+```
+
+We use the weak formulation with Gaussian perturbations to avoid expensive second-order derivatives while maintaining unbiased estimation.
+
+### Adaptive Gating
+Instead of applying FP regularization at every training step, we:
+1. Monitor FP residual during training
+2. Apply regularization only when residual exceeds threshold
+3. Reduce computational cost while maintaining physical accuracy
+
+## Preliminary Results
+
+- ✅ Energy network correctly learns analytical score functions
+- ✅ VP-SDE components generate high-quality 2D images
+- ✅ Molecular system integration works correctly
+- 🚧 Real molecular benchmarks in progress
+
+## Next Steps
+
+1. **Benchmark on standard systems**: Alanine dipeptide, Chignolin, BBA
+2. **Implement distillation**: Compress teacher into fast student model
+3. **Comprehensive evaluation**: Compare against baseline methods on sampling quality and simulation accuracy
+4. **Large-scale experiments**: Test on dipeptide datasets and small proteins
+
+## Contact
+
+This work is part of my research portfolio for PhD applications. I have an MSc in Computational Biology and am seeking research positions/internships in machine learning for molecular simulation.
+
+**GitHub**: [LoqmanSamani](https://github.com/LoqmanSamani)  
+**Project**: [physics_aware_diffusion](https://github.com/LoqmanSamani/physics_aware_diffusion)
+
+## License
+
+This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+This work builds upon:
+- *"Consistent Sampling and Simulation: Molecular Dynamics with Energy-Based Diffusion Models"* (Plainer et al., NeurIPS 2025)
+- Methods for conservative score parameterization and Fokker-Planck regularization
+
+## References
+```bibtex
+@inproceedings{plainer2025consistent,
+  title={Consistent Sampling and Simulation: Molecular Dynamics with Energy-Based Diffusion Models},
+  author={Plainer, Michael and Wu, Hao and Klein, Leon and G{\"u}nnemann, Stephan and No{\'e}, Frank},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2025}
+}
+```
