@@ -17,8 +17,6 @@ class MDDistillationTrainer(nn.Module):
             teacher_enet: nn.Module,
             student_enet: nn.Module,
             forward_vp: nn.Module,
-            reverse_vp: nn.Module,
-            dt: float,
             data_loader,
             optimizer: torch.optim.Optimizer,
             fp_gate: Callable,
@@ -50,8 +48,6 @@ class MDDistillationTrainer(nn.Module):
         self.teacher_enet = teacher_enet.to(self.device)
         self.student_enet = student_enet.to(self.device)
         self.forward_vp = forward_vp.to(self.device)
-        self.reverse_vp = reverse_vp.to(self.device)
-        self.dt = torch.tensor(dt).to(self.device) if dt < 0.0 else torch.tensor(-dt).to(self.device)
         self.data_loader = data_loader
         self.val_loader = val_loader
         self.optimizer = optimizer
@@ -80,7 +76,6 @@ class MDDistillationTrainer(nn.Module):
         self.use_amp = self.mix_precision and self.device.type == "cuda"
         self.scaler = GradScaler('cuda') if self.use_amp else None
         self.scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-        #self.scaler = torch.cuda.amp.GradScaler() if self.use_amp else None
         self.gate_params = gate_params or {
             "k": 1.2, "snr_min": 0.5, "t_scale": 0.1,
             "sharpness": 5.0, "eps": 0.1
@@ -103,8 +98,8 @@ class MDDistillationTrainer(nn.Module):
             if (epoch + 1) % self.log_freq == 0:
                 lr = self.optimizer.param_groups[0]['lr']
                 print(f"Epoch: {epoch + 1}/{self.epochs} | LR: {lr:.2e} | "
-                      f"Total Loss: {mean_losses[0]:.4f} | Force Loss: {mean_losses[2]:.4f} | "
-                      f"FP Loss: {mean_losses[3]:.4f} | Traj Loss: {mean_losses[4]:.4f}")
+                      f"Total Loss: {mean_losses[0]:.4f} | Force Loss: {mean_losses[1]:.4f} | "
+                      f"FP Loss: {mean_losses[2]:.4f} | Traj Loss: {mean_losses[3]:.4f}")
                 if self.val_loader is not None:
                     val_loss = self.validate()
                     self.losses['val_losses'].append(val_loss)
@@ -129,15 +124,16 @@ class MDDistillationTrainer(nn.Module):
             batch_idx = batch.batch.to(self.device)
             num_molecules = batch.num_graphs
             # extract cached trajectory data if available
-            teacher_trajectories = None
-            traj_params_list = None
-            if hasattr(batch, 'has_trajectories') and batch.has_trajectories and self.traj_freq % epoch == 0:
-                # retrieve trajectories from dataset using molecule indices
-                traj_data = self.data_loader.dataset_ref.get_trajectories_for_batch(batch.mol_indices)
-                teacher_trajectories = traj_data['trajectories']
-                traj_params_list = traj_data['params']
-            # decide whether to compute trajectory loss
-            compute_traj = (teacher_trajectories is not None and self.traj_freq % epoch == 0)
+            compute_traj = False
+            if hasattr(batch, "mol_idx") and epoch % self.traj_freq == 0:
+                mol_indices = batch.mol_idx.tolist()
+                traj_data = self.data_loader.dataset_ref.get_trajectories_for_batch(mol_indices)
+                teacher_trajectories = traj_data["trajectories"]
+                traj_params_list = traj_data["params"]
+                compute_traj = True
+            else:
+                teacher_trajectories = None
+                traj_params_list = None
             if self.use_amp:
                 with torch.amp.autocast('cuda'):
                     step_losses = self.train_step(
@@ -155,7 +151,6 @@ class MDDistillationTrainer(nn.Module):
                     compute_traj_loss = compute_traj
                 )
                 step_losses[0].backward()
-            # gradient accumulation and optimization (unchanged)
             if (step + 1) % self.grad_acc == 0:
                 if self.use_amp:
                     self.scaler.unscale_(self.optimizer)
@@ -190,7 +185,7 @@ class MDDistillationTrainer(nn.Module):
     def train_step(self, x0: torch.Tensor, atom_features: torch.Tensor, edge_index: torch.Tensor,
                    batch_idx: torch.Tensor, num_molecules: int, teacher_trajectories: list,
                    traj_params_list: list, compute_traj_loss):
-        # Standard diffusion loss computation
+        # force loss
         # ------------------------------------------------
         noise = torch.randn_like(x0)
         x0 = x0.clone()
@@ -207,8 +202,6 @@ class MDDistillationTrainer(nn.Module):
         lambda_val = self.lambda_t(t_atom.mean())
         xt, _ = self.forward_vp(x0, noise, t_atom)
         xt = xt.detach()
-
-        # force loss
         with self.freeze_params(self.teacher_enet):
             xt_teacher = xt.clone().requires_grad_(True)
             true_logp = self.teacher_enet(xt_teacher, atom_features, edge_index, t_atom, batch_idx)
@@ -325,8 +318,9 @@ class MDDistillationTrainer(nn.Module):
         v = torch.randn_like(x) * torch.sqrt((kb_t / mass).detach().clone())  # maxwell-boltzmann
         alpha = torch.exp(torch.tensor(-friction * dt, device=x.device))
         sigma = torch.sqrt(kb_t * (1 - alpha ** 2) / mass)
-        steps = tqdm(range(num_steps), desc="MD-Trajectory")
-        for _ in steps:
+        #steps = tqdm(range(num_steps), desc="MD-Trajectory")
+        #for _ in steps:
+        for _ in range(num_steps):
             # get forces from the trained energy model
             forces = self.get_forces(energy_net, x, atom_features, edge_index, batch_idx, float(kb_t), t_eval)
             # langevin integrator

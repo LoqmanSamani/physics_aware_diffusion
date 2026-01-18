@@ -5,6 +5,8 @@ from torch_geometric.loader import DataLoader
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from tqdm import tqdm
+from contextlib import contextmanager
+import os
 
 
 @dataclass
@@ -194,7 +196,7 @@ class SyntheticMolecularDataset(torch.utils.data.Dataset):
         """
         device = next(teacher_model.parameters()).device
         teacher_model.eval()
-        with torch.no_grad():
+        with self.freeze_params(teacher_model):
             for mol in tqdm(self.molecules, desc="Computing teacher trajectories"):
                 params = mol['traj_params']
                 x0 = mol['pos'].to(device)
@@ -223,6 +225,18 @@ class SyntheticMolecularDataset(torch.utils.data.Dataset):
                     x = x + params.dt * v
                     trajectory.append(x.detach().cpu().clone())
                 mol['trajectory'] = torch.stack(trajectory)  # (num_steps, num_atoms, 3)
+
+    @contextmanager
+    def freeze_params(self, module):
+        old_requires_grad = []
+        for p in module.parameters():
+            old_requires_grad.append(p.requires_grad)
+            p.requires_grad_(False)
+        try:
+            yield
+        finally:
+            for p, rg in zip(module.parameters(), old_requires_grad):
+                p.requires_grad_(rg)
 
     def _create_gaussian_blob(self, num_atoms: int) -> torch.Tensor:
         """random 3d blob with unit variance"""
@@ -293,8 +307,10 @@ class SyntheticMolecularDataset(torch.utils.data.Dataset):
             data.mol_idx = idx
         return data
 
-    def save_to_disk(self, path: str):
+    def save_to_disk(self, path: str, filename: str):
         """save dataset to disk for reuse"""
+        filepath = os.path.join(path, filename)
+        os.makedirs(path, exist_ok=True)
         torch.save({
             'molecules': self.molecules,
             'config': {
@@ -307,13 +323,14 @@ class SyntheticMolecularDataset(torch.utils.data.Dataset):
                 'vary_traj_params': self.vary_traj_params,
                 'base_traj_params': self.base_traj_params.to_dict() if self.base_traj_params else None
             }
-        }, path)
-        print(f"dataset saved to {path}")
+        }, filepath)
+        print(f"dataset saved to {filepath}")
 
     @classmethod
-    def load_from_disk(cls, path: str):
+    def load_from_disk(cls, path: str, filename: str):
         """load precomputed dataset from disk"""
-        data = torch.load(path,  weights_only=False)
+        filepath = os.path.join(path, filename)
+        data = torch.load(filepath,  weights_only=False)
         config = data['config']
 
         # create dataset without regenerating
@@ -382,13 +399,13 @@ def create_dataloader(dataset, batch_size: int = 4, shuffle: bool = True, num_wo
     """create PyG dataloader with custom collate for trajectory handling"""
 
     def custom_collate(data_list):
+        from torch_geometric.data import Batch
         batch = Batch.from_data_list(data_list)
-        if hasattr(data_list[0], "trajectory"):
-            batch.mol_indices = [data.mol_idx for data in data_list]
-            batch.trajectories = [data.trajectory for data in data_list]
-            batch._dataset = None
+        if all(hasattr(d, "mol_idx") for d in data_list):
+            batch.mol_indices = [d.mol_idx for d in data_list]
+        #if hasattr(data_list[0], "has_trajectory") and data_list[0].has_trajectory:
+        #    batch.mol_indices = [data.mol_idx for data in data_list]
         return batch
-
     # create loader with custom collate
     loader = DataLoader(
         dataset,
