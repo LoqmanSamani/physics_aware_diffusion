@@ -1,39 +1,54 @@
-# Physics-Aware Diffusion Models for Efficient Molecular Dynamics
+# Physics-Aware Diffusion Models for Molecular Dynamics
 
-## Overview
+## What this repository represents
 
-Energy-based diffusion models trained on molecular dynamics (MD) simulations can generate equilibrium molecular configurations, potentially reducing the need for expensive MD simulations. However, these models face several critical limitations:
+This repository implements the methods described in the proposal **Adaptive Fokker–Planck Regularization and Physics-Informed Distillation for Efficient Molecular Dynamics with Energy-Based Diffusion Models**. The codebase is not a generic diffusion framework. It is a research prototype designed to study when and how score-based diffusion models can be used as physically meaningful molecular dynamics engines rather than as equilibrium samplers alone.
 
-1. **Training instability** – Standard training procedures often fail to converge reliably
-2. **Expensive inference** – Generating MD trajectories requires running the diffusion model for each configuration, scaling linearly with trajectory length
-3. **Physical inconsistency** – The learned score function at small diffusion times violates the Fokker-Planck equation, producing correct equilibrium distributions but incorrect dynamics
+The central focus is the low-noise regime of diffusion models trained on Boltzmann-distributed molecular configurations. In this regime, the score should approximate conservative forces derived from an underlying energy landscape. Empirically, standard training objectives often fail to satisfy this requirement even when equilibrium statistics appear correct. This repository explores that gap and provides concrete algorithmic mechanisms to reduce it.
 
-Recent work [(Plainer et al.)](https://arxiv.org/abs/2506.17139) has shown that enforcing Fokker-Planck consistency during training improves physical validity, but at significant computational cost.
+## Scientific motivation
 
-## Research Goals
+Score-based diffusion models provide a principled way to learn gradients of log densities. When trained on equilibrium molecular data, these gradients are expected to recover physical forces up to a constant factor. In practice, this correspondence breaks down near zero diffusion time. The learned score may reproduce the target distribution under denoising-based sampling while violating the Fokker–Planck equation that governs the forward diffusion process. These violations lead to force fields that are inconsistent with any coherent stochastic dynamics and can destabilize molecular trajectories.
 
-This project develops methods to make energy-based diffusion models both **physically accurate** and **computationally efficient** through:
+Recent work [(Plainer et al.)](https://arxiv.org/abs/2506.17139) shows that enforcing Fokker–Planck consistency improves physical behavior but at a high computational cost. Uniform enforcement across diffusion times and configurations scales poorly and limits applicability to realistic molecular systems. At the same time, even physically consistent diffusion models remain expensive to use for long molecular dynamics trajectories due to repeated evaluation and differentiation of large energy networks.
 
-1. **Adaptive Fokker-Planck regularization** – Apply the expensive Fokker-Planck constraint only when violations exceed a set of thresholds, rather than at every training step
-2. **Progressive distillation** – Compress the physically consistent model into a faster student model that:
-   - Uses fewer diffusion steps for independent sampling (optional)
-   - Takes larger timesteps during MD simulation
-   - Preserves both equilibrium statistics and conservative forces
+This repository addresses both issues in a unified framework.
 
-The goal is to achieve substantial speedups while maintaining thermodynamic and dynamic correctness.
+## Core ideas implemented here
 
-## Current Implementation Status
+### Adaptive Fokker–Planck regularization
 
-### ✅ Core Components (Complete)
+Fokker–Planck consistency is treated as a diagnostic constraint rather than a global requirement. The code implements selective regularization that targets diffusion times and configurations where violations are most likely to affect force accuracy. A lightweight gating mechanism decides whether the expensive Fokker–Planck residual should be evaluated for a given sample, based on quantities already available during standard diffusion training.
 
-- **VP-SDE diffusion framework**: Forward process, reverse sampling, variance scheduler
-- **Energy network**: Graph transformer with conservative parameterization for molecular systems
-- **Fokker-Planck regularization**: Weak residual formulation with adaptive gating
-- **Training infrastructure**: Combined DSM + FP loss with batch processing
-- **Sampling methods**: Both independent (iid) sampling and Langevin dynamics simulation
-- **Distillation pipeline**: Progressive distillation of teacher model into fast student 
+This approach reduces unnecessary computation while preserving the physical role of the constraint in the low-noise regime. The implementation follows a weak formulation of the Fokker–Planck residual to avoid explicit second-order derivatives.
 
-### 🧪 Validation Experiments (Complete)
+### Energy-based parameterization
+
+Models in this repository are parameterized through a scalar energy function. Scores are obtained as spatial gradients of this energy. This guarantees conservative forces by construction and provides a clear physical interpretation of the learned model. Time dependence is retained to remain consistent with diffusion dynamics.
+
+### Physics-informed distillation for molecular dynamics
+
+Even with selective regularization, teacher diffusion models remain too expensive for practical molecular dynamics. The repository therefore implements a distillation framework that transfers physical behavior from a high-capacity teacher into a compact student model.
+
+Distillation operates at three levels. First, force-level matching aligns the student score with the teacher score, with emphasis on small diffusion times. Second, the student is subject to the same selective Fokker–Planck regularization to preserve local physical consistency. Third, short trajectory-level supervision aligns the dynamical behavior of the student with that of the teacher under Langevin dynamics. This combination reduces inference cost while limiting long-term drift in simulated trajectories.
+
+## What is implemented and validated
+
+The current codebase supports the full training and distillation pipeline described above.
+
+- Continuous-time VP-SDE diffusion with forward and reverse dynamics
+- Energy-based score models for molecular and graph-structured systems
+- Weak Fokker–Planck residual computation with adaptive gating
+- Joint denoising and selective physics-based training
+- Langevin dynamics driven by learned energy models
+- Teacher–student distillation with force and trajectory supervision
+
+
+
+
+
+
+### 🧪 Validation Experiments
 
 #### 1. Analytical Sanity Checks
 Verified that the energy network correctly learns scores for systems with known analytical solutions:
