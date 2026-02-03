@@ -7,8 +7,8 @@ def score_from_energy(logp: torch.Tensor, data: torch.Tensor, use_soft_clipping:
     score = torch.autograd.grad(
         outputs=logp_sum,
         inputs=data,
-        create_graph=True,
-        retain_graph=True
+        create_graph=True, # i thin this should be False when sampling for efficiency reasons
+        retain_graph=True # i thin this should be False when sampling for efficiency reasons
     )[0]
     if use_soft_clipping:
         norm = torch.norm(score, dim=-1, keepdim=True)
