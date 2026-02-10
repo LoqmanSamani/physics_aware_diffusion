@@ -66,4 +66,5 @@ trainer = MNISTTrainer(
 
 
 if __name__ == "__main__":
+    print(sum(p.numel() for p in score_net.parameters()))
     train_losses = trainer()
