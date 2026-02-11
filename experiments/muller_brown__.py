@@ -1,5 +1,5 @@
-from ..data.loaders.muller_brown_data import langevin_sampling
-from ..data.loaders.muller_brown_eval import MullerBrownEvaluator
+from ..data.loaders.muller_brown_data import MullerBrownEvaluator, langevin_sampling
+
 
 
 # example evaluation
