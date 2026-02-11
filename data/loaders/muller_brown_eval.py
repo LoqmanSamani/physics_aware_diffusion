@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Callable
 import matplotlib.pyplot as plt
-from ..data.loaders.muller_brown_data import langevin_sampling
 
 
-class DiffusionEvaluator:
+
+class MullerBrownEvaluator:
     """evaluate consistency between iid sampling and simulation"""
     def __init__(self, potential, dataset_mean, dataset_std, kbt = 23.0):
         self.potential = potential
@@ -22,21 +21,28 @@ class DiffusionEvaluator:
         """convert original samples to normalized space"""
         return (x - self.mean) / self.std
 
-    @torch.no_grad()
-    def iid_sampling(self, sampler: nn.Module, n_samples = 10000, device = 'cuda'):
+    #@torch.no_grad()
+    def iid_sampling(self, sampler: nn.Module, n_samples = 10000, dt: float = 1e-3, device = 'cuda',
+                     store_trajectory: bool = False, normalize_output: bool = False):
         """generate independent samples via diffusion denoising
-        args:
+        args
             sampler: sampler of trained diffusion model
             n_samples: Number of samples to generate
         returns:
             samples: tensor of shape (n_samples, 2) in original space
         """
-        samples_norm = sampler(n_samples, device = device)
+        samples_norm = sampler.iid_sampler(
+            n_samples = n_samples,
+            dt = dt,
+            device = device,
+            store_trajectory = store_trajectory,
+            normalize_output = normalize_output
+        )
         samples = self.unnormalize(samples_norm)
         return samples
 
-    # @torch.no_grad()
-    def simulation_sampling(self, model: nn.Module, score_fn: Callable, n_steps: int = 30000, n_parallel: int = 100,
+    #@torch.no_grad()
+    def simulation_sampling(self, model: nn.Module, n_steps: int = 30000, n_parallel: int = 100,
                             dt: float = 0.005, mass: float = 0.5, gamma: float = 1.0, t_eval: float = 1e-5,
                             save_every: int = 100, device: str = 'cuda', log_freq: int = 1000):
         """
@@ -55,19 +61,12 @@ class DiffusionEvaluator:
         v = torch.randn(n_parallel, 2, device=device) * np.sqrt(self.kbt / mass)
         noise_scale = np.sqrt(2 * gamma * self.kbt * dt / mass)
         t_eval = torch.full((n_parallel,), t_eval, device = device)
-
         samples = []
         print(f"Running simulation for {n_steps} steps...")
         for step in range(n_steps):
-            # get energy (logp) from the model and convert it to score at t = e_eval
+            # get energy (logp) from the model and convert it to score at t = e_eval (the model  will do it internally)
             # (we will train and sample the energy model with t_min > 0 for training stability reasons)
-            x = x.detach()
-            x.requires_grad_(True)
-            logp = model(x, t_eval)
-            score = score_fn(logp, x)
-            # convert score to force: F = -kBT * ∇log p = -kBT * score
-            # score is gradient of log density in normalized space
-            # need to account for normalization when converting to forces
+            score = model.score(x, t_eval)
             force = -self.kbt * score / (self.std.to(device) ** 2)
             # Langevin update
             noise = torch.randn_like(v) * noise_scale
@@ -77,7 +76,6 @@ class DiffusionEvaluator:
                 samples.append(x.cpu().clone())
             if (step + 1) % log_freq == 0:
                 print(f"Simulation step {step + 1}/{n_steps}")
-
         samples = torch.cat(samples, dim = 0)
         samples = self.unnormalize(samples)
         return samples
@@ -171,46 +169,3 @@ class DiffusionEvaluator:
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.show()
-
-
-# example evaluation
-def evaluate_model(model, dataset, potential, device='cpu'):
-    """
-    Complete evaluation pipeline
-
-    Args:
-        model: Trained diffusion model
-        dataset: MolecularDataset with normalization stats
-        potential: True potential for reference
-    """
-    evaluator = DiffusionEvaluator(potential=potential, dataset_mean=dataset.mean, dataset_std=dataset.std, kbt=23.0)
-
-    print("Generating reference samples from true potential...")
-    reference_samples = langevin_sampling(
-        potential=potential,
-        n_steps=500000,
-        save_every=5,
-        device=device
-    )
-
-    print("\nGenerating IID samples from diffusion model...")
-    iid_samples = evaluator.iid_sampling(sampler=model, n_samples=10000, device=device)
-
-    print("\nGenerating simulation samples using learned score...")
-    sim_samples = evaluator.simulation_sampling(
-        model=model,
-        n_steps=30000,
-        n_parallel=100,
-        device=device
-    )
-
-    print("\nVisualizing results...")
-    evaluator.visualize_comparison(
-        reference_samples=reference_samples,
-        iid_samples=iid_samples,
-        sim_samples=sim_samples,
-        title_prefix=f"{model.__class__.__name__} - ",
-        save_path=f"{model.__class__.__name__}_comparison.png"
-    )
-
-    return reference_samples, iid_samples, sim_samples
