@@ -60,7 +60,6 @@ class MBTrainer(nn.Module):
         self.global_step = 0
         self.base_lr = optim.param_groups[0]['lr']
         self.best_loss = float('inf')
-        self.scaler = GradScaler('cuda') if self.use_amp else None
         self.scheduler = CosineAnnealingLR(optim, T_max=epochs, eta_min=1e-6)
         self.losses = {'total_losses': [], 'dsm_losses': [], 'fp_losses': []}
 
@@ -100,13 +99,13 @@ class MBTrainer(nn.Module):
                 self.global_step += 1
                 self.update_learning_rate()
             total_losses.append(step_losses[0].item() * self.grad_acc)
+            dsm_losses.append(step_losses[1].item() * self.grad_acc)
+            fp_losses.append(step_losses[2].item() * self.grad_acc)
             pbar.set_postfix({
                 'total': f'{step_losses[0].item() * self.grad_acc:.4f}',
                 'dsm': f'{step_losses[1].item() * self.grad_acc:.4f}',
                 'fp': f'{step_losses[2].item() * self.grad_acc:.4f}'
             })
-            dsm_losses.append(step_losses[1].item() * self.grad_acc)
-            fp_losses.append(step_losses[2].item() * self.grad_acc)
         if self.global_step >= self.warmup_steps:
             self.scheduler.step()
         total_loss = sum(total_losses) / len(total_losses)

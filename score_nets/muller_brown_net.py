@@ -70,7 +70,7 @@ class MullerBrownNet(nn.Module):
         log_p = self.output_proj(h)
         return log_p
 
-    def score(self, x, t):
+    def score(self, x, t, create_graph=True):
         """
         compute score function: s(x, t) = ∇_x log p(x, t)
         args:
@@ -84,7 +84,7 @@ class MullerBrownNet(nn.Module):
         score = torch.autograd.grad(
             outputs=log_p.sum(),
             inputs=x_input,
-            create_graph=True
+            create_graph=create_graph
         )[0]
         return score
 
