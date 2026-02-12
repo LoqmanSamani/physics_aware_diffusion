@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import os
 
 
-class MullerBrownSampler(nn.Module):
+class MBSampler(nn.Module):
     """
     Sampler for energy-based diffusion models
     Handles both iid sampling (denoising) and simulation
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     ).to(device)
 
     # Create sampler
-    sampler = MullerBrownSampler(
+    sampler = MBSampler(
         model=model,
         beta_min=0.1,
         beta_max=20.0,

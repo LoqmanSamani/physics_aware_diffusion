@@ -28,4 +28,16 @@ def snr_fokker_planck_loss(r1: torch.Tensor, r2: torch.Tensor, batch_idx: torch.
     return alpha * mol_loss.mean()
 
 
+def mb_fokker_planck_loss(r1: torch.Tensor, r2: torch.Tensor, alpha: float = 5e-4) -> torch.Tensor:
+    """specific loss used for mueller-brown experiment"""
+    loss = 0.5 * (r1**2 + r2**2)  # (num_atoms,)
+    return alpha * loss.mean()
 
+
+def mb_snr_fokker_planck_loss(r1: torch.Tensor, r2: torch.Tensor, variance: torch.Tensor, gamma: float = 5.0, alpha: float = 5e-4) -> torch.Tensor:
+    """specific snr loss used for mueller-brown experiment"""
+    snr = (1.0 - variance) / variance.clamp(min=1e-8)
+    gamma_t = torch.full_like(snr, gamma)
+    weight = torch.minimum(snr, gamma_t)
+    loss = 0.5 * weight * (r1**2 + r2**2)
+    return alpha * loss.mean()

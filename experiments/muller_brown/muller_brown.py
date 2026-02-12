@@ -1,4 +1,4 @@
-from ..data.loaders.muller_brown_data import MullerBrownEvaluator, langevin_sampling
+from data.loaders.muller_brown_data import MullerBrownEvaluator, langevin_sampling
 
 
 

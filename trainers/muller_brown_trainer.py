@@ -166,7 +166,6 @@ class MBTrainer(nn.Module):
             'max_epochs': self.epochs,
             'base_larning_rate': self.base_lr,
             'global_step': self.global_step
-
         }
         filename = "mb_best.pth" if is_best else f"mb_epoch_{epoch}.pth"
         filepath = os.path.join(self.store_path, filename)

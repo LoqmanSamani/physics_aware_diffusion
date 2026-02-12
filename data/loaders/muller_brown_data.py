@@ -4,6 +4,8 @@ import numpy as np
 from torch.utils.data import Dataset
 from typing import Optional
 import matplotlib.pyplot as plt
+from pathlib import Path
+import json
 
 
 
@@ -106,40 +108,145 @@ def generate_muller_brown_data(
         mass: float = 0.5,
         save_every: int = 50,
         kbt: float = 23.0,
-        log_freq: int = 1000,
-        device: str = 'cuda'
+        log_freq: int = 100000,
+        device: str = 'cuda',
+        burn_in: int = 500000,
+        save_data: bool = True,
+        save_dir: str = './data',
+        filename: str = 'muller_brown_dataset.pt',
+        force_regenerate: bool = False
 ):
     """
     generate training data from Müller-Brown potential
+    args:
+        n_samples: number of samples to generate
+        init_pos: initial position (none for random)
+        dt: time step
+        mass: particle mass
+        save_every: save every n-th step
+        kbt: temperature
+        log_freq: logging frequency
+        device: 'cuda' or 'cpu'
+        burn_in: number of burn-in steps to discard
+        save_data: whether to save the dataset
+        save_dir: directory to save the dataset
+        filename: filename for saved dataset
+        force_regenerate: if True, regenerate even if file exists
+
     returns:
         dataset: MolecularDataset object
         potential: MullerBrownPotential object (for evaluation)
     """
-    n_steps = n_samples * save_every # specifies number of samples
     potential = MullerBrownPotential(kbt=kbt)
-    # generate samples via Langevin dynamics
-    samples = langevin_sampling(
-        potential = potential,
-        n_steps = n_steps,
-        initial_pos = init_pos,
-        dt = dt,
-        mass = mass,
-        kbt = kbt,
-        save_every = save_every,
-        log_freq = log_freq,
-        device = device
+    load_path = Path(save_dir) / filename
+    if load_path.exists() and not force_regenerate:
+        print(f"Found existing dataset at {load_path}")
+        print("Loading existing dataset (use force_regenerate=True to regenerate)")
+        dataset = load_dataset(str(load_path))
+        return dataset, potential
+    n_steps = n_samples * save_every + burn_in
+    print(f"\n{'=' * 60}")
+    print(f"Generating Müller-Brown Dataset")
+    print(f"{'=' * 60}")
+    print(f"Total MD steps: {n_steps:,}")
+    print(f"Burn-in steps: {burn_in:,}")
+    print(f"Sampling steps: {n_samples * save_every:,}")
+    print(f"Save every: {save_every}")
+    print(f"Final samples: {n_samples:,}")
+    print(f"{'=' * 60}\n")
+    all_samples = langevin_sampling(
+        potential=potential,
+        n_steps=n_steps,
+        initial_pos=init_pos,
+        dt=dt,
+        mass=mass,
+        kbt=kbt,
+        save_every=save_every,
+        log_freq=log_freq,
+        device=device
     )
-    # normalize samples
+    n_burn_samples = burn_in // save_every
+    print(f"\nDiscarding {n_burn_samples} burn-in samples...")
+    samples = all_samples[n_burn_samples:]
+    print(f"Remaining samples: {len(samples)}")
+    print("\nNormalizing samples...")
     mean = samples.mean(dim=0)
     std = samples.std(dim=0)
     samples_normalized = (samples - mean) / std
-
+    print(f"Mean: {mean}")
+    print(f"Std: {std}")
     dataset = MolecularDataset(samples_normalized)
     dataset.mean = mean
     dataset.std = std
-
+    if save_data:
+        print(f"\nSaving dataset...")
+        save_dataset(dataset, save_dir=save_dir, filename=filename)
+    print(f"\n{'=' * 60}")
+    print(f"Dataset Generation Complete!")
+    print(f"{'=' * 60}\n")
     return dataset, potential
 
+
+def save_dataset(dataset: MolecularDataset, save_dir: str = './data',
+                 filename: str = 'muller_brown_dataset.pt',
+                 save_metadata: bool = True):
+    """
+    save the dataset and normalization statistics
+    args:
+        dataset: MolecularDataset object to save
+        save_dir: directory to save the dataset
+        filename: name of the file
+        save_metadata: whether to save metadata (mean, std, etc.)
+    """
+    save_path = Path(save_dir)
+    save_path.mkdir(parents=True, exist_ok=True)
+    data_dict = {
+        'samples': dataset.samples,
+        'mean': dataset.mean,
+        'std': dataset.std,
+        'n_samples': len(dataset),
+    }
+    full_path = save_path / filename
+    torch.save(data_dict, full_path)
+    print(f"✓ Dataset saved to: {full_path}")
+    print(f"  - Number of samples: {len(dataset)}")
+    print(f"  - Sample shape: {dataset.samples.shape}")
+    print(f"  - Mean: {dataset.mean}")
+    print(f"  - Std: {dataset.std}")
+    if save_metadata:
+        metadata = {
+            'n_samples': len(dataset),
+            'sample_shape': list(dataset.samples.shape),
+            'mean': dataset.mean.tolist() if dataset.mean is not None else None,
+            'std': dataset.std.tolist() if dataset.std is not None else None,
+        }
+        metadata_path = save_path / filename.replace('.pt', '_metadata.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Metadata saved to: {metadata_path}")
+    return full_path
+
+
+def load_dataset(load_path: str) -> MolecularDataset:
+    """
+    load a saved dataset
+    args:
+        load_path: path to the saved dataset file
+    returns:
+        dataset: MolecularDataset object
+    """
+    if not Path(load_path).exists():
+        raise FileNotFoundError(f"Dataset file not found: {load_path}")
+    data_dict = torch.load(load_path)
+    dataset = MolecularDataset(data_dict['samples'])
+    dataset.mean = data_dict['mean']
+    dataset.std = data_dict['std']
+    print(f"✓ Dataset loaded from: {load_path}")
+    print(f"  - Number of samples: {len(dataset)}")
+    print(f"  - Sample shape: {dataset.samples.shape}")
+    print(f"  - Mean: {dataset.mean}")
+    print(f"  - Std: {dataset.std}")
+    return dataset
 
 
 class MullerBrownEvaluator:
