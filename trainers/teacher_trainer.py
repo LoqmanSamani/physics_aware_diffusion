@@ -11,7 +11,9 @@ import os
 
 
 class TeacherTrainer(nn.Module):
-    """teacher trainer with fokker-planck regularization applied through drift-score gating"""
+    """teacher trainer with fokker-planck regularization applied through drift-score gating
+    TODO: fix lambda t bug. note: look at muller brown trainer for exact solution
+    """
     def __init__(
             self,
             energy_net: nn.Module,
@@ -164,7 +166,7 @@ class TeacherTrainer(nn.Module):
                     noise[mask] = noise[mask] @ R[mol_idx].T
         t_mol = self.sample_time(num_molecules, self.eps_time) # (num_molecules,)
         t_atom = t_mol[batch_idx] # (num_atoms,)
-        lambda_val = self.lambda_t(t_atom.mean())
+        lambda_val = self.lambda_t(t_atom)
         xt, true_score = self.forward_vp(x0, noise, t_atom)
         xt = xt.detach().requires_grad_(True)
         logp = self.energy_net(xt, atom_features, edge_index, t_atom, batch_idx)
@@ -190,7 +192,7 @@ class TeacherTrainer(nn.Module):
                 t_active, batch_active, self.forward_vp.vs, seed2
             )
             var = self.forward_vp.vs.variance(t_active)
-            fp_lambda_val = self.lambda_t(t_active.mean())
+            fp_lambda_val = self.lambda_t(t_active)
             fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, alpha=self.fp_alpha) # weighted fp-loss
             #fp_loss = fp_lambda_val * self.fp_loss(r1, r2, batch_active, variance=var, alpha=self.fp_alpha)
         total_loss = (dsm_loss + fp_loss) / self.grad_acc
@@ -211,7 +213,7 @@ class TeacherTrainer(nn.Module):
             noise = torch.randn_like(x0)
             t_mol = self.sample_time(num_molecules, self.eps_time)  # (num_molecules,)
             t_atom = t_mol[batch_idx]  # (num_atoms,)
-            lambda_val = self.lambda_t(t_atom.mean())
+            lambda_val = self.lambda_t(t_atom)
             xt, true_score = self.forward_vp(x0, noise, t_atom)
             with self.freeze_params(self.energy_net):
                 xt = xt.detach().requires_grad_(True)

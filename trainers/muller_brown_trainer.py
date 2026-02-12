@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.amp import GradScaler
 from typing import Callable, Dict, Optional
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 import os
-
 
 
 class MBTrainer(nn.Module):
@@ -18,10 +17,9 @@ class MBTrainer(nn.Module):
             data_loader,
             optim: torch.optim.Optimizer,
             fp_gate: Callable,
-            fp_loss: Callable, # fokker-planck loss
-            dsm_loss: Callable, # denoising score matching loss
-            noise_fn: Callable, # computes noise from energy
-            fp_resid: Callable, # computes weak fokker-planck residuals
+            fp_loss: Callable,
+            noise_fn: Callable,
+            fp_resid: Callable,
             epochs: int,
             device: torch.device | None = None,
             grad_acc: int = 1,
@@ -30,7 +28,7 @@ class MBTrainer(nn.Module):
             store_path: str = "./mb_train",
             warmup_steps: int = 100,
             fp_alpha: float = 5e-4,
-            lambda_t: Callable[[torch.Tensor], torch.Tensor] = lambda t: torch.exp(-t), # time-dependent weighting λ(t)
+            lambda_t: Callable[[torch.Tensor], torch.Tensor] = lambda t: torch.exp(-t),
             eps_time: float = 1e-5,
             gate_params: Optional[Dict] = None,
             *args
@@ -43,7 +41,6 @@ class MBTrainer(nn.Module):
         self.optim = optim
         self.fp_gate = fp_gate
         self.fp_loss = fp_loss
-        self.dsm_loss = dsm_loss
         self.noise_fn = noise_fn
         self.fp_resid = fp_resid
         self.epochs = epochs
@@ -55,7 +52,7 @@ class MBTrainer(nn.Module):
         self.lambda_t = lambda_t
         self.fp_alpha = fp_alpha
         self.eps_time = eps_time
-        self.gate_params = {"k": 1.2, "snr_min": 0.5, "t_scale": 0.1, "sharpness": 5.0, "eps": 0.1}\
+        self.gate_params = {"k": 1.2, "snr_min": 0.5, "t_scale": 0.1, "sharpness": 5.0, "eps": 0.1} \
             if gate_params is None else gate_params
         self.global_step = 0
         self.base_lr = optim.param_groups[0]['lr']
@@ -80,11 +77,11 @@ class MBTrainer(nn.Module):
                 self.save_checkpoint(epoch + 1, mean_losses[0])
             if mean_losses[0] < self.best_loss:
                 self.best_loss = mean_losses[0]
-                self.save_checkpoint(epoch + 1, mean_losses[0], is_best = True)
+                self.save_checkpoint(epoch + 1, mean_losses[0], is_best=True)
         return self.losses
 
     def train_batch(self, pbar):
-        """train one epoch of teacher model"""
+        """train one epoch"""
         total_losses = []
         dsm_losses = []
         fp_losses = []
@@ -114,20 +111,24 @@ class MBTrainer(nn.Module):
         return total_loss, dsm_loss, fp_loss
 
     def train_step(self, x: torch.Tensor):
+        """train one step"""
         noise = torch.randn_like(x)
         x = x.clone()
         noise = noise.clone()
         t = self.sample_time(x.shape[0], self.eps_time)
-        lambda_val = self.lambda_t(t.mean())
         xt, true_score = self.fwd(x, noise, t)
         xt = xt.detach().requires_grad_(True)
         logp = self.mb_net(xt, t)
         pred_noise = self.noise_fn(logp, xt, t, self.fwd.vs)
-        dsm_loss = lambda_val * self.dsm_loss(pred_noise, noise) # weighted dsm-loss
+        mse_per_sample = F.mse_loss(pred_noise, noise, reduction='none')
+        mse_per_sample = mse_per_sample.mean(dim=-1)
+        lambda_vals = self.lambda_t(t)
+        dsm_loss = (lambda_vals * mse_per_sample).mean()
         fp_loss = torch.tensor(0.0, device=self.device)
         fp_mask, activate_fp = self.fp_gate(
             x, t, self.fwd.vs, k=self.gate_params['k'], snr_min=self.gate_params['snr_min'],
-            t_scale=self.gate_params['t_scale'], sharpness=self.gate_params['sharpness'], eps=self.gate_params['eps']
+            t_scale=self.gate_params['t_scale'], sharpness=self.gate_params['sharpness'],
+            eps=self.gate_params['eps']
         )
         if activate_fp:
             xt_active, t_active = self.subset_graph_data(xt, t, torch.unique(fp_mask))
@@ -135,8 +136,12 @@ class MBTrainer(nn.Module):
             r1 = self.fp_resid(self.mb_net, xt_active, t_active, self.fwd.vs, seed1)
             seed2 = self.global_step * 1001
             r2 = self.fp_resid(self.mb_net, xt_active, t_active, self.fwd.vs, seed2)
-            fp_lambda_val = self.lambda_t(t_active.mean())
-            fp_loss = fp_lambda_val * self.fp_loss(r1, r2, alpha=self.fp_alpha) # weighted fp-loss
+            fp_lambda_vals = self.lambda_t(t_active)
+            fp_resid_product = self.fp_loss(r1, r2, alpha=self.fp_alpha)
+            if fp_resid_product.dim() > 0:
+                fp_loss = (fp_lambda_vals * fp_resid_product).mean()
+            else:
+                fp_loss = fp_resid_product
         total_loss = (dsm_loss + fp_loss) / self.grad_acc
         fp_loss = fp_loss / self.grad_acc
         dsm_loss = dsm_loss / self.grad_acc
@@ -173,7 +178,7 @@ class MBTrainer(nn.Module):
         if is_best:
             print(f"Best model saved at epoch {epoch} with loss {loss:.4f}")
         else:
-            print(f"Checkpoint saved at epoch {epoch} with loss {loss: .4f}")
+            print(f"Checkpoint saved at epoch {epoch} with loss {loss:.4f}")
 
     def sample_time(self, batch_size: int, eps: float = 1e-5) -> torch.Tensor:
         return eps + (1 - eps) * torch.rand(batch_size, device=self.device)

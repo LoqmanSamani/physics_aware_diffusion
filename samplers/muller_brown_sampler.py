@@ -2,9 +2,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
-from contextlib import contextmanager
 import os
-
+import gc
 
 
 
@@ -20,11 +19,11 @@ class MBSampler(nn.Module):
         args:
             model: MullerBrownNet
             rev: reverse vp-sde diffusion
-            dataset_mean: Mean from training data (for un-normalization)
-            dataset_std: Std from training data (for un-normalization)
+            dataset_mean: Mean from training data
+            dataset_std: Std from training data
             eps_time: Small time value for evaluation at t~0
             store_path: Path to save results
-            kbt: Temperature for force computation
+            kbt: Temperature
         """
         super().__init__()
         self.model = model
@@ -35,7 +34,6 @@ class MBSampler(nn.Module):
         self.register_buffer('mean', dataset_mean)
         self.register_buffer('std', dataset_std)
 
-
     def normalize(self, x):
         """convert from original space to normalized space"""
         return (x - self.mean) / self.std
@@ -44,6 +42,7 @@ class MBSampler(nn.Module):
         """convert from normalized space to original space"""
         return x_norm * self.std + self.mean
 
+    @torch.no_grad()
     def iid_sampler(self, n_samples, dt: float = 1e-3, device: str = 'cuda',
                     store_trajectory: bool = False, return_original_space: bool = True):
         """
@@ -63,28 +62,37 @@ class MBSampler(nn.Module):
         self.model.eval()
         self.mean = self.mean.to(device)
         self.std = self.std.to(device)
+
         x = torch.randn(n_samples, self.model.input_dim, device=device)
         results = {"x0": None, "trajectory": []}
         if store_trajectory:
-            results["trajectory"].append(x.clone())
+            results["trajectory"].append(x.cpu().clone())
         num_steps = int((1.0 - self.eps_time) / dt)
         t_schedule = torch.linspace(1.0, self.eps_time, num_steps + 1)
         dt_tensor = torch.tensor(dt, device=x.device, dtype=x.dtype)
         iterator = tqdm(range(num_steps), desc="IID Sampling")
-
-        with self.freeze_params(self.model):
-            for step in iterator:
-                t_current = float(t_schedule[step])
-                t_batch = t_current * torch.ones(n_samples, device=device)
-                score = self.model.score(x, t_batch)
-                if step == num_steps - 1:
-                    x = self.rev(x, score, t_batch, dt_tensor, last_step=True)
-                else:
-                    x = self.rev(x, score, t_batch, dt_tensor)
-                x = x.detach()
-                if store_trajectory:
-                    results['trajectory'].append(x.clone())
-
+        for step in iterator:
+            t_current = float(t_schedule[step])
+            t_batch = t_current * torch.ones(n_samples, device=device)
+            with torch.enable_grad():  # temporarily enable for score computation
+                x_temp = x.detach().requires_grad_(True)
+                logp = self.model(x_temp, t_batch)
+                score = torch.autograd.grad(
+                    outputs=logp.sum(),
+                    inputs=x_temp,
+                    create_graph=False
+                )[0]
+                score = score.detach()
+            if step == num_steps - 1:
+                x = self.rev(x, score, t_batch, dt_tensor, last_step=True)
+            else:
+                x = self.rev(x, score, t_batch, dt_tensor)
+            x = x.detach()
+            if store_trajectory and (step % 100 == 0):
+                results['trajectory'].append(x.cpu().clone())
+            if step % 100 == 0:
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
         if return_original_space:
             x_original = self.unnormalize(x)
             results['x0'] = x_original
@@ -96,9 +104,9 @@ class MBSampler(nn.Module):
             if store_trajectory:
                 results['trajectory'] = torch.stack(results['trajectory'], dim=0)
         self.save_results(results, f"sample_{n_samples}_iid.pth")
-
         return results['x0']
 
+    @torch.no_grad()
     def langevin_simulator(self, n_parallel: int = 100, n_steps: int = 30000,
                            dt: float = 0.005, mass: float = 0.5, gamma: float = 1.0,
                            device: str = 'cuda', save_every: int = 100,
@@ -128,40 +136,46 @@ class MBSampler(nn.Module):
         noise_scale = np.sqrt(2 * gamma * self.kbt * dt / mass)
         samples = []
         burn_in_steps = int(n_steps * burn_in_ratio)
+        t_eval = torch.full((n_parallel,), self.eps_time, device=device)
+        for step in tqdm(range(n_steps), desc="Langevin Simulation"):
+            with torch.enable_grad():  # temporarily enable for score computation
+                x_temp = x.detach().requires_grad_(True)
+                logp = self.model(x_temp, t_eval)
+                score_norm = torch.autograd.grad(
+                    outputs=logp.sum(),
+                    inputs=x_temp,
+                    create_graph=False
+                )[0]
+                score_norm = score_norm.detach()
 
-        with self.freeze_params(self.model):
-            for step in tqdm(range(n_steps), desc="Langevin Simulation"):
-                # get score in normalized space at t -> 0
-                t_eval = torch.full((n_parallel,), self.eps_time, device=device)
-                score_norm = self.model.score(x, t_eval)
-                force_norm = -self.kbt * score_norm
-                noise = torch.randn_like(v) * noise_scale
-                v = v - gamma * v * dt + (force_norm / mass) * dt + noise
-                x = x + v * dt
-                if step >= burn_in_steps and step % save_every == 0:
-                    samples.append(x.cpu().clone())
-
+            force_norm = -self.kbt * score_norm
+            noise = torch.randn_like(v) * noise_scale
+            v = v - gamma * v * dt + (force_norm / mass) * dt + noise
+            x = x + v * dt
+            x = x.detach()
+            v = v.detach()
+            if step >= burn_in_steps and step % save_every == 0:
+                samples.append(x.cpu().clone())
+            if step % 1000 == 0:
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
+                if step % 5000 == 0:
+                    gc.collect()
         samples = torch.cat(samples, dim=0)
         if return_original_space:
-            samples_original = self.unnormalize(samples)
+            samples_original = self.unnormalize(samples.to(device))
+            samples_original = samples_original.cpu()  # Move back to CPU
             self.save_results(samples_original, f"sample_{n_parallel}_langevin.pth")
+            if device == 'cuda':
+                torch.cuda.empty_cache()
+            gc.collect()
             return samples_original
         else:
             self.save_results(samples, f"sample_{n_parallel}_langevin.pth")
+            if device == 'cuda':
+                torch.cuda.empty_cache()
+            gc.collect()
             return samples
-
-    @contextmanager
-    def freeze_params(self, module):
-        """context manager to temporarily freeze model parameters"""
-        old_requires_grad = []
-        for p in module.parameters():
-            old_requires_grad.append(p.requires_grad)
-            p.requires_grad_(False)
-        try:
-            yield
-        finally:
-            for p, rg in zip(module.parameters(), old_requires_grad):
-                p.requires_grad_(rg)
 
     def save_results(self, results, file_name) -> None:
         """save results to disk"""
