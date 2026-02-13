@@ -82,6 +82,7 @@ class MBSampler(nn.Module):
                     inputs=x_temp,
                     create_graph=False
                 )[0]
+                score = -score
                 score = score.detach()
             if step == num_steps - 1:
                 x = self.rev(x, score, t_batch, dt_tensor, last_step=True)
@@ -146,6 +147,7 @@ class MBSampler(nn.Module):
                     inputs=x_temp,
                     create_graph=False
                 )[0]
+                score_norm = -score_norm
                 score_norm = score_norm.detach()
 
             force_norm = -self.kbt * score_norm
