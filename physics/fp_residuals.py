@@ -118,9 +118,6 @@ def light_fp_residual(energy_net: nn.Module, x: torch.Tensor, atom_features: tor
     r = (0.5 * beta_t * (div_s + s_sq) - drift - div_drift - dlogp_dt)
     return r
 
-
-
-
 def mb_heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, t: torch.Tensor, scheduler: nn.Module,
                          seed: int | None = None, sigma: float = 1e-4, h_s: float = 1e-3, h_d: float = 5e-4) -> torch.Tensor:
     """weak Fokker–Planck residual estimator (for mueller-brown experiment) using
@@ -168,9 +165,10 @@ def mb_heavy_fp_residual(energy_net: nn.Module, x: torch.Tensor, t: torch.Tensor
     # denominator
     den = h_s * h_d * (h_s + h_d)
     # ∂_t log p_t^θ(x)
-    dlogp_dt = num / den
+    dlogp_dt = (num / den).mean(dim=-1)
     r = (0.5 * beta_t * (div_s + s_sq) - drift - div_drift - dlogp_dt)
     return r
+
 
 
 
@@ -217,7 +215,7 @@ def mb_light_fp_residual(energy_net: nn.Module, x: torch.Tensor, t: torch.Tensor
     logp_t_m = energy_net(x_, t_m)
     num = (h_s ** 2 * logp_t_p + (h_d ** 2 - h_s ** 2) * logp_t - h_d ** 2 * logp_t_m)
     den = h_s * h_d * (h_s + h_d)
-    dlogp_dt = num / den
+    dlogp_dt = (num / den).mean(dim=-1)
     # final fp residual
     r = (0.5 * beta_t * (div_s + s_sq) - drift - div_drift - dlogp_dt)
     return r
