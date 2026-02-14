@@ -6,3 +6,7 @@ def distillation_loss(pred: torch.Tensor, target: torch.Tensor, batch_idx: torch
     atom_loss = ((pred - target) ** 2).sum(dim=-1)
     mol_loss = scatter_mean(atom_loss, batch_idx, dim=0)
     return mol_loss.mean()
+
+def mb_distillation_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    loss = ((pred - target) ** 2).sum(dim=-1)
+    return loss.mean()
