@@ -18,6 +18,8 @@ from physics.fp_gate import MBFPGate
 from physics.fp_residuals import mb_heavy_fp_residual, mb_light_fp_residual
 from losses.dsm_losses import mse_loss
 from losses.fp_losses import mb_fokker_planck_loss
+from trainers.mb_dist import MBDistillationTrainer
+from losses.distillation_loss import distillation_loss
 
 
 
@@ -50,7 +52,15 @@ vs = LinearVS(beta_min = 0.1, beta_max = 20.0) # linear schedular with min and m
 fwd = ForwardVP(vs) # forward diffusion which applies forward process of vp-sde (adding noise gradually to the data)
 
 # we will train a relative small network
-net = MullerBrownNet(
+t_net = MullerBrownNet(
+    input_dim = 2,
+    time_embed_dim = 128,
+    hidden_dim = 256,
+    num_blocks = 6,
+    activation ='silu'
+)
+
+s_net = MullerBrownNet(
     input_dim = 2,
     time_embed_dim = 64,
     hidden_dim = 128,
@@ -58,14 +68,14 @@ net = MullerBrownNet(
     activation ='silu'
 )
 
-print(sum(p.numel() for p in net.parameters())) # sum of all trainable parameters of the diffusion network (which in this case is a noise predictor)
+print(sum(p.numel() for p in t_net.parameters())) # sum of all trainable parameters of the diffusion network (which in this case is a noise predictor)
 
-optim = torch.optim.Adam([p for p in net.parameters()], lr=1e-4)
+optim = torch.optim.Adam([p for p in t_net.parameters()], lr=1e-4)
 
 gate = MBFPGate(input_dim = 7, hidden_dim = 32)
 
 trainer = MBTrainer(
-    mb_net = net,
+    mb_net = t_net,
     fwd = fwd,
     data_loader = dataloader,
     optim = optim,
@@ -88,3 +98,37 @@ trainer = MBTrainer(
 )
 
 losses = trainer()
+
+optim_ = torch.optim.Adam([p for p in s_net.parameters()], lr=1e-4)
+
+
+
+dist_trainer = MBDistillationTrainer(
+    t_net = t_net,
+    s_net = s_net,
+    fwd = fwd,
+    data_loader = dataloader,
+    optim = optim_,
+    fp_gate = fp_gate,
+    fp_loss = mb_fokker_planck_loss,
+    dist_loss = distillation_loss,
+    score_fn = score_from_energy,
+    fp_res = mb_heavy_fp_residual,
+    epochs = 50,
+    device = 'cpu',
+    grad_acc = 1,
+    checkpoint = 5,
+    log_freq = 50,
+    store_path = "./mb_dist_train",
+    warmup_steps = 10,
+    fp_alpha = 5e-4,
+    gate_params = {
+            "k": 1.2, "snr_min": 0.5, "t_scale": 0.1,
+            "sharpness": 5.0, "eps": 0.1
+        },
+    traj_freq = 10,
+    eps_time = 1e-5,
+    compute_trajectory_loss = False
+)
+
+dist_losses = dist_trainer()
