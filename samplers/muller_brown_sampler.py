@@ -89,8 +89,13 @@ class MBSampler(nn.Module):
             else:
                 x = self.rev(x, score, t_batch, dt_tensor)
             x = x.detach()
-            if store_trajectory and (step % 100 == 0):
-                results['trajectory'].append(x.cpu().clone())
+            if step < 500:
+                if store_trajectory and (step % 10 == 0):
+                    results['trajectory'].append(x.cpu().clone())
+            else:
+                if store_trajectory: # and (step % 10 == 0):
+                    results['trajectory'].append(x.cpu().clone())
+
             if step % 100 == 0:
                 if device == 'cuda':
                     torch.cuda.empty_cache()
