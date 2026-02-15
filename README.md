@@ -1,5 +1,28 @@
 # Physics-Aware Diffusion Models for Molecular Dynamics
 
+<p align="center">
+  <img src="https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/results/figures/imgs/img.webp" alt="Energy Landscape" width="800"/>
+</p>
+
+<p align="center">
+  <a href="https://medium.com/@samaniloqman91/when-diffusion-models-learn-the-wrong-physics-fa66a8fea0f2">
+    <img src="https://img.shields.io/badge/Read%20the%20Story-Medium-black?style=for-the-badge&logo=medium" alt="Medium Article"/>
+  </a>
+  <a href="https://github.com/LoqmanSamani/physics_aware_diffusion/blob/systembiology/LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="License"/>
+  </a>
+</p>
+
+---
+
+## 📖 Read the Full Story
+
+**[When Diffusion Models Learn the Wrong Physics](https://medium.com/@samaniloqman91/when-diffusion-models-learn-the-wrong-physics-fa66a8fea0f2)**
+
+A deep dive into why diffusion models can generate perfect equilibrium samples while learning forces that violate basic physics, and how adaptive Fokker-Planck regularization combined with physics-informed distillation addresses this problem.
+
+---
+
 ## What this repository represents
 
 This repository implements the methods described in the proposal **Adaptive Fokker–Planck Regularization and Physics-Informed Distillation for Efficient Molecular Dynamics with Energy-Based Diffusion Models**. The codebase is not a generic diffusion framework. It is a research prototype designed to study when and how score-based diffusion models can be used as physically meaningful molecular dynamics engines rather than as equilibrium samplers alone.
@@ -43,12 +66,7 @@ The current codebase supports the full training and distillation pipeline descri
 - Langevin dynamics driven by learned energy models
 - Teacher–student distillation with force and trajectory supervision
 
-
-
-
-
-
-### 🧪 Validation Experiments
+## 🧪 Validation Experiments
 
 #### 1. Analytical Sanity Checks
 Verified that the energy network correctly learns scores for systems with known analytical solutions:
@@ -118,7 +136,7 @@ physics_aware_diffusion/
 │   ├── fp_residuals.py           # Fokker-Planck residual computation
 │   ├── drift_score_gate.py       # Adaptive FP gating
 │   ├── derive_score.py           # Score from energy gradient
-│   └── derive_noise.py           # Noise from energy gradinet 
+│   └── derive_noise.py           # Noise from energy gradient 
 │
 ├── losses/                       # Loss functions
 │   ├── dsm_losses.py             # Denoising score matching
@@ -144,6 +162,15 @@ physics_aware_diffusion/
 ```
 
 
+## Installation
+
+```bash
+git clone https://github.com/LoqmanSamani/physics_aware_diffusion.git
+cd physics_aware_diffusion
+pip install -r requirements.txt
+```
+
+
 ## Preliminary Results
 
 - ✅ Energy network correctly learns analytical score functions
@@ -154,10 +181,28 @@ physics_aware_diffusion/
 ## Next Steps
 
 1. **Benchmark on standard systems**: Alanine dipeptide, Chignolin, BBA
-3. **Comprehensive evaluation**: Compare against baseline methods on sampling quality and simulation accuracy
-4. **Large-scale experiments**: Test on dipeptide datasets and small proteins
+2. **Comprehensive evaluation**: Compare against baseline methods on sampling quality and simulation accuracy
+3. **Large-scale experiments**: Test on dipeptide datasets and small proteins
 
+## Citation
+
+If you find this work useful, please consider citing:
+
+```bibtex
+@article{samani2025physics,
+  title={Adaptive Fokker-Planck Regularization and Physics-Informed Distillation for Efficient Molecular Dynamics with Energy-Based Diffusion Models},
+  author={Samani, Loqman},
+  year={2025},
+  url={https://medium.com/@samaniloqman91/when-diffusion-models-learn-the-wrong-physics-fa66a8fea0f2}
+}
+```
 
 ## License
 
 This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+
+---
+
+<p align="center">
+  <a href="https://medium.com/@samaniloqman91/when-diffusion-models-learn-the-wrong-physics-fa66a8fea0f2">📖 Read the full technical writeup on Medium</a>
+</p>
